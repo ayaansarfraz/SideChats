@@ -184,6 +184,8 @@ Build tooling: esbuild bundling `content.ts` → `content.js` and `background.ts
 
 ## Integration Contract & Pre-Merge Checklist
 
+**Status: all 4 tracks merged into `main` (`eb1bed1`) with real `content.ts` glue wiring them together — this is now a genuinely loadable, working extension, not 4 isolated branches.** Verified with an actual unpacked-extension load in Chromium (Playwright) against a ChatGPT-shaped fixture: select text in an assistant message → Ask button appears → click it → Shadow DOM panel opens pre-filled with the real extracted context → submit a question → round-trips through the background worker to the real local server → error correctly surfaces in the panel (502, because `ANTHROPIC_API_KEY` is still invalid — see below). Still open: a pass on **live** chatgpt.com (this was fixture-based), and a valid API key to see a real Claude reply end to end.
+
 *(Added after a cross-worktree review once all 4 parallel tracks in `PARALLEL_PLAN.md` reported "done." This is the authoritative list of what must change before those branches are merged — see `docs/board.md` Messages for the full review.)*
 
 ### 1. Fix the `askButton.ts` ↔ `context.ts` interface (blocker) — ✅ done and verified live-wired
