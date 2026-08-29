@@ -1,23 +1,12 @@
 import type { ContextPackage } from "../shared/types";
 
-/**
- * Stub for Track A's extension/src/content/context.ts.
- * Same exported signature; swapped for the real implementation at integration time.
- */
-function getSelectionContext(selection: Selection | null): ContextPackage | null {
-  const text = selection?.toString().trim() ?? "";
-  if (!text) return null;
-  return {
-    selectedText: text,
-    parentUserMessage: "[stub] parent user message",
-    parentAiResponse: "[stub] parent AI response",
-  };
-}
-
 const BUTTON_ID = "sidechats-ask-button";
 const BUTTON_OFFSET_PX = 8;
 
-export function initAskButton(onAsk: (ctx: ContextPackage) => void): void {
+export function initAskButton(
+  getContext: (selection: Selection) => ContextPackage | null,
+  onAsk: (ctx: ContextPackage) => void,
+): void {
   let button: HTMLButtonElement | null = null;
   let currentCtx: ContextPackage | null = null;
 
@@ -95,7 +84,7 @@ export function initAskButton(onAsk: (ctx: ContextPackage) => void): void {
       return;
     }
 
-    const ctx = getSelectionContext(selection);
+    const ctx = getContext(selection);
     if (!ctx) {
       removeButton();
       return;
