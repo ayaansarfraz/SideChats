@@ -186,7 +186,7 @@ Build tooling: esbuild bundling `content.ts` → `content.js` and `background.ts
 
 *(Added after a cross-worktree review once all 4 parallel tracks in `PARALLEL_PLAN.md` reported "done." This is the authoritative list of what must change before those branches are merged — see `docs/board.md` Messages for the full review.)*
 
-### 1. Fix the `askButton.ts` ↔ `context.ts` interface (blocker)
+### 1. Fix the `askButton.ts` ↔ `context.ts` interface (blocker) — ✅ done
 
 As written, `initAskButton(onAsk)` has no way to receive Track A's real `getSelectionContext` — it calls a **hardcoded local stub** internally (`"[stub] parent user message"` / `"[stub] parent AI response"`). `PARALLEL_PLAN.md`'s own integration snippet imports `getSelectionContext` from `./context` in `content.ts` but never passes it anywhere, so the import is dead and the stub silently ships to production. This type-checks cleanly and passes every track's own "definition of done" — it only shows up if someone reads the actual reply content, since the fake context still produces a plausible-looking Claude reply.
 
@@ -212,7 +212,7 @@ initAskButton(getSelectionContext, (ctx) => panel.open(ctx));
 
 This makes the dependency explicit at the call site instead of relying on someone remembering to hand-edit `askButton.ts` during integration.
 
-### 2. Recover from an expired/missing side chat (high)
+### 2. Recover from an expired/missing side chat (high) — ✅ done
 
 The server sweeps idle side chats after 30 minutes (`store.ts`) and returns `404 { error: "Side chat not found" }` for a dead `sideChatId`. In `panel.ts`'s `submit()`, that error is rendered correctly as an error bubble, but `state.sideChatId` is never cleared — every subsequent send keeps retrying the same dead ID and the thread is stuck until the panel is closed and reopened.
 
@@ -232,8 +232,8 @@ As of this review, every worktree (`sidechats-extension`, `context-extraction`, 
 
 ### Lower-priority cleanups (safe to defer past MVP validation)
 
-- **CORS is prefix-matched, not exact** (`server/src/index.ts`): `origin.startsWith("http://localhost")` also matches `http://localhost.evil.com`; `origin.startsWith("chrome-extension://")` allows *any* installed extension, not just this one. Low risk for a localhost prototype, but worth an exact allowlist eventually.
-- **Redundant CSS injection**: `manifest.json`'s `content_scripts[0].css: ["panel.css"]` injects the panel stylesheet into chatgpt.com's own light DOM on every page load, even though `panel.ts` already fetches the same file into its Shadow DOM (the only place its selectors match anything). Drop the `css` key; keep the `web_accessible_resources` entry — that one's load-bearing for the Shadow DOM fetch.
+- ~~**CORS is prefix-matched, not exact**~~ — ✅ done. `server/src/index.ts` now parses `origin` with `new URL()` and checks `protocol === "chrome-extension:"` or exact `hostname === "localhost"`, instead of `startsWith`.
+- ~~**Redundant CSS injection**~~ — ✅ done. Dropped the `css` key from `manifest.json`'s content script entry (`side-panel` worktree); `web_accessible_resources` still serves `panel.css` to the Shadow DOM fetch in `panel.ts`.
 - **No unit tests** for `context.ts`'s DOM-walking logic — the single most complex, highest-risk piece of logic in the system. The Playwright fixtures already built by Track A/B for manual checks would make cheap jsdom/happy-dom regression tests.
 - **No typecheck step wired into the build** — `extension/package.json` only has `dev`/`build` (esbuild strips types without checking them). `npx tsc --noEmit` currently passes clean in every worktree and in a merged integration test, but nothing enforces that going forward; consider adding a `typecheck` script.
 

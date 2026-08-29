@@ -9,9 +9,18 @@ const port = Number(process.env.PORT ?? 3000);
 app.use(
   cors({
     origin: (origin, callback) => {
-      if (!origin || origin.startsWith("chrome-extension://") || origin.startsWith("http://localhost")) {
+      if (!origin) {
         callback(null, true);
         return;
+      }
+      try {
+        const { protocol, hostname } = new URL(origin);
+        if (protocol === "chrome-extension:" || (protocol === "http:" && hostname === "localhost")) {
+          callback(null, true);
+          return;
+        }
+      } catch {
+        // fall through to reject
       }
       callback(new Error("Not allowed by CORS"));
     },
