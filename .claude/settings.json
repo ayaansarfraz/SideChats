@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$(cd \"$(dirname \"$(git rev-parse --git-common-dir)\")\" && pwd)/.claude/hooks/team-board.py\" full"
+          }
+        ]
+      }
+    ]
+  }
+}

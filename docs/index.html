@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SideChats — agent board</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,600;1,6..72,400&family=Syne:wght@700;800&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --desk: #e8dfcc;
+      --desk-ink: #241c14;
+      --muted: #6f675c;
+      --highlight: #ffe14a;
+      --highlight-deep: #f0c92a;
+      --card: #fff8eb;
+      --line: rgba(36, 28, 20, 0.12);
+      --side: #1b2830;
+      --side-ink: #e7efe8;
+      --side-dim: #8aa09a;
+      --copper: #c45c26;
+      --ok: #2f7d4a;
+      --busy: #c45c26;
+      --blocked: #a33b32;
+      --idle: #6f675c;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; }
+    body {
+      background: var(--desk);
+      color: var(--desk-ink);
+      font-family: "Newsreader", "Iowan Old Style", Georgia, serif;
+      font-size: 18px;
+      line-height: 1.45;
+    }
+
+    .shell {
+      display: grid;
+      grid-template-columns: minmax(0, 1.15fr) minmax(320px, 0.85fr);
+      min-height: 100vh;
+    }
+
+    .main {
+      padding: 36px 44px 48px;
+    }
+
+    .kicker {
+      font-family: "IBM Plex Mono", ui-monospace, monospace;
+      font-size: 11px;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin: 0 0 10px;
+    }
+
+    h1 {
+      font-family: "Syne", sans-serif;
+      font-weight: 800;
+      font-size: clamp(40px, 6vw, 64px);
+      letter-spacing: -0.04em;
+      line-height: 0.95;
+      margin: 0 0 18px;
+      display: inline;
+      background-image: linear-gradient(transparent 62%, var(--highlight) 62%, var(--highlight) 92%, transparent 92%);
+      box-decoration-break: clone;
+    }
+
+    .ask {
+      display: inline-flex;
+      align-items: center;
+      margin-left: 10px;
+      padding: 5px 10px 4px;
+      border: 0;
+      border-radius: 999px;
+      background: var(--copper);
+      color: #fff8eb;
+      font-family: "Syne", sans-serif;
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      vertical-align: 10px;
+    }
+
+    .lede {
+      max-width: 42rem;
+      color: var(--muted);
+      margin: 18px 0 28px;
+    }
+
+    .lede strong { color: var(--desk-ink); font-weight: 600; }
+
+    .meta-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px 18px;
+      font-family: "IBM Plex Mono", ui-monospace, monospace;
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 28px;
+    }
+
+    .dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--ok);
+      display: inline-block;
+      margin-right: 6px;
+      animation: pulse 1.8s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.35; }
+    }
+
+    .lanes {
+      display: grid;
+      gap: 14px;
+    }
+
+    .lane {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-left: 6px solid var(--highlight-deep);
+      padding: 16px 18px 14px;
+      box-shadow: 3px 4px 0 rgba(36, 28, 20, 0.06);
+    }
+
+    .lane-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 12px;
+      margin-bottom: 8px;
+    }
+
+    .lane h2 {
+      font-family: "Syne", sans-serif;
+      font-size: 22px;
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      margin: 0;
+    }
+
+    .status {
+      font-family: "IBM Plex Mono", ui-monospace, monospace;
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      padding: 3px 8px;
+      border-radius: 999px;
+      background: rgba(36, 28, 20, 0.08);
+      color: var(--idle);
+      white-space: nowrap;
+    }
+    .status.in-progress { background: rgba(196, 92, 38, 0.14); color: var(--busy); }
+    .status.blocked { background: rgba(163, 59, 50, 0.14); color: var(--blocked); }
+    .status.done, .status.idle { background: rgba(47, 125, 74, 0.12); color: var(--ok); }
+    .status.idle { background: rgba(36, 28, 20, 0.08); color: var(--idle); }
+
+    .lane p { margin: 0 0 8px; }
+    .lane .owns {
+      font-family: "IBM Plex Mono", ui-monospace, monospace;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .lane .owns code {
+      font-family: inherit;
+      background: var(--highlight);
+      padding: 1px 5px;
+      color: var(--desk-ink);
+    }
+
+    .side {
+      background: var(--side);
+      color: var(--side-ink);
+      padding: 32px 28px 40px;
+      display: flex;
+      flex-direction: column;
+      min-height: 100vh;
+    }
+
+    .side h2 {
+      font-family: "Syne", sans-serif;
+      font-size: 28px;
+      letter-spacing: -0.03em;
+      margin: 0 0 6px;
+    }
+
+    .side .hint {
+      font-family: "IBM Plex Mono", ui-monospace, monospace;
+      font-size: 11px;
+      color: var(--side-dim);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      margin-bottom: 22px;
+    }
+
+    .thread {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      overflow: auto;
+    }
+
+    .msg {
+      border-left: 2px solid rgba(255, 225, 74, 0.7);
+      padding: 8px 0 8px 14px;
+    }
+
+    .msg .who {
+      font-family: "IBM Plex Mono", ui-monospace, monospace;
+      font-size: 11px;
+      color: var(--highlight);
+      margin-bottom: 4px;
+    }
+
+    .msg p { margin: 0; font-size: 16px; color: var(--side-ink); }
+
+    .empty, .error {
+      font-family: "IBM Plex Mono", ui-monospace, monospace;
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    .error {
+      background: #fff1d6;
+      border: 1px dashed var(--copper);
+      padding: 14px 16px;
+      color: var(--desk-ink);
+    }
+    .error code { font-family: inherit; background: var(--highlight); padding: 0 4px; }
+
+    @media (max-width: 860px) {
+      .shell { grid-template-columns: 1fr; }
+      .side { min-height: auto; }
+      .main { padding: 28px 22px 36px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .dot { animation: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <section class="main">
+      <p class="kicker">Shared context · not the main chat</p>
+      <h1>Who's working</h1>
+      <span class="ask">Ask</span>
+      <p class="lede">Every Claude (and Cursor) session reads and updates <strong>docs/board.md</strong>. Highlight a lane before you start so nobody else steps on the same files.</p>
+      <div class="meta-row">
+        <span><span class="dot" id="live-dot"></span><span id="live-label">waiting for board…</span></span>
+        <span id="path-label"></span>
+      </div>
+      <div class="lanes" id="lanes"></div>
+    </section>
+    <aside class="side">
+      <p class="kicker" style="color:#8aa09a">Side thread</p>
+      <h2>Messages</h2>
+      <p class="hint">Newest first · append to board.md</p>
+      <div class="thread" id="thread"></div>
+    </aside>
+  </div>
+  <script>
+    const lanesEl = document.getElementById("lanes");
+    const threadEl = document.getElementById("thread");
+    const liveLabel = document.getElementById("live-label");
+    const pathLabel = document.getElementById("path-label");
+
+    function esc(s) {
+      return s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+    }
+
+    function parseBoard(md) {
+      const activeMatch = md.split("## Active")[1]?.split("## Messages")[0] || "";
+      const messagesMatch = md.split("## Messages")[1]?.split("## Protocol")[0] || "";
+
+      const lanes = [];
+      const chunks = activeMatch.split(/^### /m).slice(1);
+      for (const chunk of chunks) {
+        const lines = chunk.trim().split("\n");
+        const id = lines[0].trim();
+        const fields = {};
+        for (const line of lines.slice(1)) {
+          const m = line.match(/^- \*\*(.+?):\*\*\s*(.*)$/);
+          if (m) fields[m[1].toLowerCase()] = m[2];
+        }
+        lanes.push({ id, fields });
+      }
+
+      const messages = [];
+      for (const line of messagesMatch.split("\n")) {
+        const m = line.match(/^- \*\*(.+?) · (.+?) → (.+?)\*\* — (.+)$/);
+        if (m) messages.push({ time: m[1], from: m[2], to: m[3], text: m[4] });
+      }
+      return { lanes, messages };
+    }
+
+    function statusClass(status) {
+      return (status || "").toLowerCase().replace(/\s+/g, "-");
+    }
+
+    function render(md) {
+      const { lanes, messages } = parseBoard(md);
+      lanesEl.innerHTML = lanes.map(({ id, fields }) => {
+        const status = fields["status"] || "unknown";
+        const owns = fields["owns"] ? `<div class="owns">owns <code>${esc(fields["owns"])}</code></div>` : "";
+        return `<article class="lane">
+          <div class="lane-top">
+            <h2>${esc(id)}</h2>
+            <span class="status ${statusClass(status)}">${esc(status)}</span>
+          </div>
+          <p>${esc(fields["working on"] || "")}</p>
+          ${owns}
+          <div class="owns">${esc(fields["agent"] || "")}${fields["updated"] ? " · " + esc(fields["updated"]) : ""}</div>
+        </article>`;
+      }).join("") || `<p class="empty">No active lanes yet.</p>`;
+
+      threadEl.innerHTML = messages.map((msg) => `
+        <article class="msg">
+          <div class="who">${esc(msg.time)} · ${esc(msg.from)} → ${esc(msg.to)}</div>
+          <p>${esc(msg.text)}</p>
+        </article>
+      `).join("") || `<p class="empty" style="color:#8aa09a">No messages yet. Append one under Messages in board.md.</p>`;
+    }
+
+    async function tick() {
+      try {
+        const res = await fetch("board.md?ts=" + Date.now(), { cache: "no-store" });
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const md = await res.text();
+        render(md);
+        liveLabel.textContent = "live · refreshes every 2s";
+        pathLabel.textContent = "docs/board.md";
+      } catch (err) {
+        lanesEl.innerHTML = `<p class="error">Can't load <code>board.md</code> from here (${esc(String(err.message))}). From the repo root run:<br><br><code>python3 -m http.server 8765 --directory docs</code><br><br>then open <code>http://localhost:8765</code></p>`;
+        liveLabel.textContent = "offline";
+      }
+    }
+
+    tick();
+    setInterval(tick, 2000);
+  </script>
+</body>
+</html>
