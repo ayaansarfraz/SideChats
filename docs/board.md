@@ -43,41 +43,8 @@ Do not create a second copy inside a worktree.
 - **Do not touch:** —
 - **Updated:** 2026-08-29 (review pass)
 
-### context-extraction
-- **Agent:** Claude Code
-- **Checkout:** worktree `context-extraction` (`/Users/ayaansarfraz/Documents/SideChats/.claude/worktrees/context-extraction`)
-- **Status:** done
-- **Working on:** Track A from `PARALLEL_PLAN.md` (extension/ has been split into 4 parallel per-file tracks across worktrees — this lane's scope is narrower than the `extension` lane's blanket "do not touch"). Implemented `extension/src/content/context.ts` (`getSelectionContext`). Touched no other file; `extension/src/shared/types.ts` and `messages.ts` untouched.
-- **Owns:** `extension/src/content/context.ts` (this worktree only)
-- **Do not touch:** —
-- **Updated:** 2026-08-29 03:22
-
-### backend-bridge
-- **Agent:** Claude Code
-- **Checkout:** worktree `backend-bridge` (`/Users/ayaansarfraz/Documents/SideChats/.claude/worktrees/backend-bridge`)
-- **Status:** done
-- **Working on:** Shipped Track D from `PARALLEL_PLAN.md`. Implemented `extension/src/background/background.ts` (onMessage listener → fetch against the real server, non-2xx/network failures resolve `{ok:false,error}` rather than throwing) and `extension/src/content/apiClient.ts` (new file, thin `chrome.runtime.sendMessage` wrapper exposing `askSideChat`/`continueSideChat`). Did not need to change `shared/messages.ts` — the drafted protocol matched the server's real request/response shape exactly. No `server/` changes needed either.
-- **Owns:** `extension/src/background/background.ts`, `extension/src/content/apiClient.ts` (this worktree only)
-- **Do not touch:** —
-- **Updated:** 2026-08-29 03:52
-
-### ask-button
-- **Agent:** Claude Code
-- **Checkout:** worktree `ask-button` (`/Users/ayaansarfraz/Documents/SideChats/.claude/worktrees/ask-button`)
-- **Status:** done
-- **Working on:** Track B from `PARALLEL_PLAN.md`. Implemented `extension/src/content/askButton.ts` (`initAskButton`) against a local stub of `getSelectionContext` (Track A's real signature, per the plan). Touched no other file; `content.ts` was temporarily wired for testing and reverted.
-- **Owns:** `extension/src/content/askButton.ts` (this worktree only)
-- **Do not touch:** —
-- **Updated:** 2026-08-29 03:40
-
-### side-panel
-- **Agent:** Claude Code
-- **Checkout:** worktree `side-panel` (`/Users/ayaansarfraz/Documents/SideChats/.claude/worktrees/side-panel`)
-- **Status:** done
-- **Working on:** Shipped Track C from `PARALLEL_PLAN.md`. Implemented `extension/src/content/panel.ts` (`createPanel`) and `extension/src/content/panel.css` — Shadow DOM host, right-docked slide-in panel, multi-turn thread, distinct loading/error states — built and verified against the spec's mock `onSubmit` only. One shared-file touch: added a `web_accessible_resources` entry for `panel.css` in `manifest.json` — required because in MV3 a content script's own `fetch(chrome.runtime.getURL(...))` is blocked without it (confirmed by hitting `net::ERR_FAILED` first), needed so the panel's shadow root can load its own stylesheet (page-level CSS can't cross the shadow boundary). Flagging since `manifest.json` isn't explicitly owned by any track. `content.ts` was temporarily wired for testing (Playwright + unpacked extension load against real chatgpt.com, screenshots of open/loading/error/close/reopen) and reverted.
-- **Owns:** `extension/src/content/panel.ts`, `extension/src/content/panel.css` (this worktree only)
-- **Do not touch:** —
-- **Updated:** 2026-08-29 04:10
+### context-extraction, backend-bridge, ask-button, side-panel — retired
+All 4 parallel tracks shipped, were merged into `main` (`eb1bed1`), and their worktrees + branches have been removed (nothing unique left in them once merged — see the review's Messages entries below for what each one did). If you're looking for that history, it's in `main`'s commit log now, not a live lane.
 
 ### cursor
 - **Agent:** Cursor (this session)
@@ -94,6 +61,7 @@ Do not create a second copy inside a worktree.
 
 Newest first. Keep each note to 1–3 lines. Tag who it's for (`all`, `backend`, `extension`, `cursor`).
 
+- **2026-08-29 (cleanup) · review → all** — Removed the `ask-button`, `backend-bridge`, `context-extraction`, `side-panel` worktrees and deleted their branches (local + origin) — all fully merged into `main`, nothing unique left in any of them. Left `sidechats-extension` alone: it's locked by an active Claude Code session (pid 84686) still running there, even though its branch is also fully merged. If that session wraps up, its worktree can go too.
 - **2026-08-29 (integration complete) · review → all** — Merged all 4 tracks into `worktree-sidechats-extension` (Tracks C/D had add/add conflicts on `manifest.json`/`panel.css`/`background.ts` against the branch's own placeholder scaffold — resolved by taking each track's real file), committed the side-panel fixes that were still sitting uncommitted (`36d9b91`), wrote the real `content.ts` integration glue (`7d7760b`) per `PARALLEL_PLAN.md`'s own snippet, and merged the whole thing into `main` (`eb1bed1`), pushed. `main` now has a genuinely complete, loadable extension for the first time. Verified with a real unpacked-extension load in Chromium (Playwright, `--load-extension`) against a ChatGPT-shaped fixture: Ask button → real context in the panel header → submit → real network round-trip through `apiClient.ts` → `background.ts` → the actual local server → error correctly surfaced in the panel (502 from the still-invalid `ANTHROPIC_API_KEY`). Also pushed the individual fixes on `feature/side-panel` and `feature/ask-button` to origin. Still open: a pass on live chatgpt.com (this was a fixture), and a valid API key for a real reply test.
 - **2026-08-29 (integration) · review → ask-button, all** — Merged Track B into `worktree-sidechats-extension`. First committed the interface fix (`initAskButton` takes `getContext` as a param instead of a hardcoded stub) as a real commit on `feature/ask-button` (`496e430`) — that fix was sitting uncommitted from the earlier review pass — then `git merge feature/ask-button` (clean, no conflicts, merge commit follows). Typechecks/builds clean with `context.ts` + `askButton.ts` together for the first time. Temporarily wired `content.ts` to call `initAskButton(getSelectionContext, onAsk)` for real, built it, and ran it in an actual Chromium browser against the same realistic fixture: Ask button appears on an assistant-message selection, clicking it fires `onAsk` with the **real** extracted `ContextPackage` (confirmed no `[stub]` text anywhere in the payload — the interface fix genuinely works, not just type-checks), button disappears after click, and no button appears for a user-message selection. Reverted `content.ts` back to the skeleton afterward (Tracks C/D not merged yet). Not pushed to origin yet.
 - **2026-08-29 (integration) · review → all** — Merged Track A for real: `git merge feature/context-extraction` into `worktree-sidechats-extension` (clean, no conflicts — merge commit `244bf49`, local only, not pushed). `extension/src/content/context.ts` now actually exists in the integration worktree. Typechecks and builds clean. Tested it against a real Chromium browser (Playwright) using a fixture that mirrors ChatGPT's real turn markup (`data-message-author-role`, nested wrapper divs, code blocks) — verified correct `ContextPackage` extraction, a paragraph+code-block multi-node selection (doesn't throw), and `null` for user-message/outside-turn/empty selections. All passed. This is still a fixture, not live chatgpt.com — that risk isn't fully closed. Tracks B/C/D (askButton, panel, apiClient+background) are not yet merged into this branch. Branch was 2 commits ahead of `origin/worktree-sidechats-extension` — pushed at user's request; `origin/worktree-sidechats-extension` is now at `244bf49`.
