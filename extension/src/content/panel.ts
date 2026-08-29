@@ -197,7 +197,16 @@ export function createPanel(deps: PanelDeps): PanelController {
       const result = await deps.onSubmit(question, requestState);
       hideLoading();
       if ("error" in result) {
-        state = { ...state, status: "error", error: result.error };
+        // A dead/expired sideChatId (e.g. the server's 30-minute idle sweep) must not be
+        // retried forever — drop it so the next send starts a fresh chat instead of
+        // permanently 404ing against a chat that no longer exists server-side.
+        const chatIsGone = result.error === "Side chat not found";
+        state = {
+          ...state,
+          status: "error",
+          error: result.error,
+          sideChatId: chatIsGone ? null : state.sideChatId,
+        };
         renderError(result.error);
       } else {
         const assistantMessage: ChatMessage = { role: "assistant", content: result.reply };

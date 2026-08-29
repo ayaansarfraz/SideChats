@@ -1,7 +1,7 @@
-/* SideChats panel styles — injected into the panel's own shadow root at runtime
-   (see panel.ts: loadPanelCss). Classes are prefixed with sidechats- because this
-   file is also referenced from manifest.json's content_scripts, which injects it
-   page-wide (light DOM) — the prefix avoids any chance of colliding with chatgpt.com. */
+/* SideChats panel styles — fetched and injected into the panel's own shadow root
+   at runtime (see panel.ts: loadPanelCss), served via manifest.json's
+   web_accessible_resources. Classes stay sidechats-prefixed as cheap insurance
+   against collisions even though the shadow root already isolates this DOM. */
 
 :host {
   all: initial;
