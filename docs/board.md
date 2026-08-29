@@ -25,26 +25,17 @@ Do not create a second copy inside a worktree.
 - **Do not touch:** —
 - **Updated:** 2026-08-29 02:32
 
-### extension
-- **Agent:** Claude Code
-- **Checkout:** worktree `worktree-sidechats-extension` (`/Users/ayaansarfraz/Documents/SideChats/.claude/worktrees/sidechats-extension`)
-- **Status:** idle
-- **Working on:** *(Corrected by review pass — this row was stale.)* This worktree is the origin of `PARALLEL_PLAN.md`'s 4-track split; its own `content.ts` is still just the skeleton stub. The selection-detection/Ask-button/side-panel work described in this row's old text is done — see `context-extraction`, `ask-button`, `side-panel`, `backend-bridge` below. This worktree is the natural place to do final integration (wire the real `content.ts` glue) once the fixes in `BUILD_PLAN.md`'s new "Integration Contract & Pre-Merge Checklist" section land.
-- **Owns:** `extension/` (blanket lock lifted — see `Do not touch`)
-- **Do not touch:** — (the old blanket "extension/" lock predates the 4-track split and no longer applies; the 4 track lanes below already override it in practice, confirmed by `context-extraction`'s and `ask-button`'s own Messages)
-- **Updated:** 2026-08-29 (review pass)
-
 ### review (this session)
 - **Agent:** Claude Code
 - **Checkout:** main (`/Users/ayaansarfraz/Documents/SideChats`)
-- **Status:** done
-- **Working on:** Cross-worktree architecture review requested by the user ("interrogator" pass) across all 5 active worktrees. Verified all 4 parallel tracks type-check individually *and* assembled a merged copy of all 4 tracks' owned files + `PARALLEL_PLAN.md`'s own integration snippet in a scratch dir to test the actual integration — found a real interface gap (see Messages). Wrote findings + required fixes into `BUILD_PLAN.md` under "Integration Contract & Pre-Merge Checklist". Did not edit any track's owned implementation files.
-- **Owns:** — (read-only review; only touched `BUILD_PLAN.md` and this board)
+- **Status:** idle
+- **Working on:** Cross-worktree architecture review, interface-fix pass, and full integration of all 4 parallel tracks into `main` (`eb1bed1`) — see Messages for the full trail. Also did the worktree/branch cleanup below.
+- **Owns:** — (no exclusive files; touches whatever the current step needs, logged here each time)
 - **Do not touch:** —
-- **Updated:** 2026-08-29 (review pass)
+- **Updated:** 2026-08-29 (cleanup)
 
-### context-extraction, backend-bridge, ask-button, side-panel — retired
-All 4 parallel tracks shipped, were merged into `main` (`eb1bed1`), and their worktrees + branches have been removed (nothing unique left in them once merged — see the review's Messages entries below for what each one did). If you're looking for that history, it's in `main`'s commit log now, not a live lane.
+### extension, context-extraction, backend-bridge, ask-button, side-panel — retired
+All 5 worktrees (the original `worktree-sidechats-extension` scaffold plus the 4 parallel tracks) shipped and were merged into `main` (`eb1bed1`). Worktrees + branches removed, local and on origin — nothing unique left in any of them once merged. `main` is now the only branch and is a complete, loadable extension. History is in `main`'s commit log, not a live lane.
 
 ### cursor
 - **Agent:** Cursor (this session)
@@ -61,6 +52,7 @@ All 4 parallel tracks shipped, were merged into `main` (`eb1bed1`), and their wo
 
 Newest first. Keep each note to 1–3 lines. Tag who it's for (`all`, `backend`, `extension`, `cursor`).
 
+- **2026-08-29 (cleanup, final) · review → all** — Removed `sidechats-extension` too (user confirmed the process holding its lock, pid 84686, wasn't doing anything — killed it, unlocked, removed the worktree, deleted `worktree-sidechats-extension` locally + on origin). All 5 original worktrees are now gone; `main` is the only branch left and holds everything merged.
 - **2026-08-29 (cleanup) · review → all** — Removed the `ask-button`, `backend-bridge`, `context-extraction`, `side-panel` worktrees and deleted their branches (local + origin) — all fully merged into `main`, nothing unique left in any of them. Left `sidechats-extension` alone: it's locked by an active Claude Code session (pid 84686) still running there, even though its branch is also fully merged. If that session wraps up, its worktree can go too.
 - **2026-08-29 (integration complete) · review → all** — Merged all 4 tracks into `worktree-sidechats-extension` (Tracks C/D had add/add conflicts on `manifest.json`/`panel.css`/`background.ts` against the branch's own placeholder scaffold — resolved by taking each track's real file), committed the side-panel fixes that were still sitting uncommitted (`36d9b91`), wrote the real `content.ts` integration glue (`7d7760b`) per `PARALLEL_PLAN.md`'s own snippet, and merged the whole thing into `main` (`eb1bed1`), pushed. `main` now has a genuinely complete, loadable extension for the first time. Verified with a real unpacked-extension load in Chromium (Playwright, `--load-extension`) against a ChatGPT-shaped fixture: Ask button → real context in the panel header → submit → real network round-trip through `apiClient.ts` → `background.ts` → the actual local server → error correctly surfaced in the panel (502 from the still-invalid `ANTHROPIC_API_KEY`). Also pushed the individual fixes on `feature/side-panel` and `feature/ask-button` to origin. Still open: a pass on live chatgpt.com (this was a fixture), and a valid API key for a real reply test.
 - **2026-08-29 (integration) · review → ask-button, all** — Merged Track B into `worktree-sidechats-extension`. First committed the interface fix (`initAskButton` takes `getContext` as a param instead of a hardcoded stub) as a real commit on `feature/ask-button` (`496e430`) — that fix was sitting uncommitted from the earlier review pass — then `git merge feature/ask-button` (clean, no conflicts, merge commit follows). Typechecks/builds clean with `context.ts` + `askButton.ts` together for the first time. Temporarily wired `content.ts` to call `initAskButton(getSelectionContext, onAsk)` for real, built it, and ran it in an actual Chromium browser against the same realistic fixture: Ask button appears on an assistant-message selection, clicking it fires `onAsk` with the **real** extracted `ContextPackage` (confirmed no `[stub]` text anywhere in the payload — the interface fix genuinely works, not just type-checks), button disappears after click, and no button appears for a user-message selection. Reverted `content.ts` back to the skeleton afterward (Tracks C/D not merged yet). Not pushed to origin yet.
