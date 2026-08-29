@@ -186,7 +186,9 @@ Build tooling: esbuild bundling `content.ts` → `content.js` and `background.ts
 
 *(Added after a cross-worktree review once all 4 parallel tracks in `PARALLEL_PLAN.md` reported "done." This is the authoritative list of what must change before those branches are merged — see `docs/board.md` Messages for the full review.)*
 
-### 1. Fix the `askButton.ts` ↔ `context.ts` interface (blocker) — ✅ done
+### 1. Fix the `askButton.ts` ↔ `context.ts` interface (blocker) — ✅ done and verified live-wired
+
+Fix committed on `feature/ask-button` (`496e430`) and merged into the integration branch alongside Track A. Tested for real: built the actual bundle with `content.ts` calling `initAskButton(getSelectionContext, onAsk)`, ran it in a real Chromium browser against a ChatGPT-shaped fixture — the Ask button fires with the real extracted context, not the old `[stub]` placeholder.
 
 As written, `initAskButton(onAsk)` has no way to receive Track A's real `getSelectionContext` — it calls a **hardcoded local stub** internally (`"[stub] parent user message"` / `"[stub] parent AI response"`). `PARALLEL_PLAN.md`'s own integration snippet imports `getSelectionContext` from `./context` in `content.ts` but never passes it anywhere, so the import is dead and the stub silently ships to production. This type-checks cleanly and passes every track's own "definition of done" — it only shows up if someone reads the actual reply content, since the fake context still produces a plausible-looking Claude reply.
 
@@ -222,7 +224,9 @@ The server sweeps idle side chats after 30 minutes (`store.ts`) and returns `404
 
 Confirmed by the `backend-bridge` track directly against the Anthropic SDK: the key currently in `server/.env` returns `401 invalid x-api-key`. Every side-chat request 502s until it's replaced.
 
-### 4. Real chatgpt.com validation, not just fixtures (high)
+### 4. Real chatgpt.com validation, not just fixtures (high) — Track A partially addressed
+
+Track A (`context.ts`) has now been git-merged into the integration branch (`worktree-sidechats-extension`, merge commit `244bf49`) and re-tested against a **real Chromium browser** (Playwright) with a realistic fixture reproducing ChatGPT's actual turn markup (`data-message-author-role`, nested layout wrapper divs, `<article data-testid="conversation-turn-N">`, markdown paragraphs + code blocks). Covered: correct extraction of `selectedText`/`parentUserMessage`/`parentAiResponse`/`priorContext`, a selection spanning a paragraph *and* a code block within one message (doesn't throw), selection inside a user message → `null`, selection outside any turn → `null`, empty selection → `null`. All passed. This is a real-browser Selection/Range test against the actual merged source, not jsdom — meaningfully stronger evidence than before, but it is still a fixture, not live chatgpt.com, so the DOM-churn risk isn't fully closed. Tracks B, C, D are still un-merged into the integration branch.
 
 `context.ts` (Track A) and `askButton.ts` (Track B) were both validated only against static Playwright fixtures (no sandbox browser access), never the live site. `context.ts` in particular is called out elsewhere in this doc as the highest-risk file — ChatGPT's markup/class names churn often, and `data-message-author-role` is an assumption, not a guarantee. Do one real pass on `chatgpt.com` with the fully merged build before calling this mergeable.
 
