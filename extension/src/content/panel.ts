@@ -1,4 +1,4 @@
-import type { ChatMessage, ContextPackage, SideChatState } from "../shared/types";
+import type { ChatMessage, ContextPackage, ImageAttachment, SideChatState } from "../shared/types";
 import { EXTENSION_RELOADED_MESSAGE, isContextInvalidatedError } from "./runtime";
 import { renderMarkdown } from "./markdown";
 
@@ -7,7 +7,8 @@ export type PanelDeps = {
   accentColor?: string;
   onSubmit: (
     question: string,
-    state: SideChatState
+    state: SideChatState,
+    images: ImageAttachment[]
   ) => Promise<{ reply: string; sideChatId?: string } | { error: string }>;
 };
 
@@ -26,6 +27,15 @@ const ICON_SEND =
 export type PanelController = {
   open: (ctx: ContextPackage) => void;
   close: () => void;
+  /** Stage an image in the composer, from a paste, a file, or a captured region. */
+  addImage: (image: ImageAttachment) => void;
+  /**
+   * Take the panel out of the picture while the tab is being captured — without
+   * this it photographs itself. Only covers the panel; the floating Ask button
+   * lives in the light DOM and is the caller's to deal with.
+   */
+  hideForCapture: () => void;
+  showAfterCapture: () => void;
 };
 
 const HOST_ID = "sidechats-root";
@@ -66,6 +76,7 @@ function emptyState(ctx: ContextPackage): SideChatState {
     messages: [],
     status: "idle",
     error: undefined,
+    pendingImages: [],
   };
 }
 
@@ -334,7 +345,7 @@ export function createPanel(deps: PanelDeps): PanelController {
     sendBtn.disabled = true;
 
     try {
-      const result = await deps.onSubmit(question, requestState);
+      const result = await deps.onSubmit(question, requestState, requestState.pendingImages);
       hideLoading();
       if ("error" in result) {
         // A dead/expired sideChatId (e.g. the server's 30-minute idle sweep) must not be
@@ -405,5 +416,17 @@ export function createPanel(deps: PanelDeps): PanelController {
     panelEl?.classList.remove("sidechats-open");
   }
 
-  return { open, close };
+  function addImage(image: ImageAttachment): void {
+    state = { ...state, pendingImages: [...state.pendingImages, image] };
+  }
+
+  function hideForCapture(): void {
+    if (host) host.style.visibility = "hidden";
+  }
+
+  function showAfterCapture(): void {
+    if (host) host.style.visibility = "";
+  }
+
+  return { open, close, addImage, hideForCapture, showAfterCapture };
 }

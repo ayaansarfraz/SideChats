@@ -33,7 +33,7 @@ describe("handleRequest", () => {
 
     const res = await handleRequest({ type: "CREATE_SIDE_CHAT", payload: createPayload });
 
-    expect(res).toEqual({ ok: true, sideChatId: "abc", reply: "a reply" });
+    expect(res).toEqual({ ok: true, kind: "reply", sideChatId: "abc", reply: "a reply" });
   });
 
   it("returns ok:false, errorType:'http' with the server's error body on a non-2xx response", async () => {
@@ -79,6 +79,6 @@ describe("handleRequest", () => {
       payload: { sideChatId: "abc", question: "why does that matter?" },
     });
 
-    expect(res).toEqual({ ok: true, sideChatId: "abc", reply: "follow-up reply" });
+    expect(res).toEqual({ ok: true, kind: "reply", sideChatId: "abc", reply: "follow-up reply" });
   });
 });

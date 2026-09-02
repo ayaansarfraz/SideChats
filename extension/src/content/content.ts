@@ -22,12 +22,12 @@ if (!adapter) {
     // The panel signs itself in the host site's own accent, so it reads as
     // deliberate next to whichever product it is overlaying.
     accentColor: adapter.accentColor,
-    onSubmit: async (question, state) => {
+    onSubmit: async (question, state, images) => {
       if (!state.sideChatId) {
-        const { sideChatId, reply } = await askSideChat(state.contextPackage, question);
+        const { sideChatId, reply } = await askSideChat(state.contextPackage, question, images);
         return { reply, sideChatId };
       }
-      const { reply } = await continueSideChat(state.sideChatId, question);
+      const { reply } = await continueSideChat(state.sideChatId, question, images);
       return { reply };
     },
   });

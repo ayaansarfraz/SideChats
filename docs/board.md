@@ -16,6 +16,36 @@ Do not create a second copy inside a worktree.
 
 ## Active
 
+### screenshot-foundation (this session)
+- **Agent:** Claude Code
+- **Checkout:** main (`/Users/ayaansarfraz/Documents/SideChats`), branch `feature-screenshot`
+- **Status:** in progress
+- **Working on:** Step 0 of the screenshot feature — the shared contract every lane depends on. Permission spike done (`captureVisibleTab` needs `<all_urls>`; `"tabs"` buys nothing — measured, table in `BUILD_PLAN.md`), plus `ImageAttachment`/`Rect` types, the full `messages.ts` contract including `CAPTURE_REGION` and `START_REGION_CAPTURE`, a `kind` discriminant on success responses, and a new `shared/image.ts` (downscale to 1568px long edge, PNG with a JPEG fallback over 1.5 MB, 2 MB hard cap, `toCaptureBox` rect math). 107 extension + 21 server tests green. Next: fork lanes A/B/C, then own integration (`content.ts`, `apiClient.ts`).
+- **Owns:** `extension/src/shared/**`, `extension/src/content/content.ts`, `extension/src/content/apiClient.ts`, `SCREENSHOT_PLAN.md`
+- **Do not touch:** —
+- **Updated:** 2026-09-02
+
+### screenshot-server (Lane A) — not started
+- **Agent:** —
+- **Checkout:** worktree `.claude/worktrees/screenshot-server` (branch `screenshot-server`, off `feature-screenshot`)
+- **Status:** unclaimed
+- **Owns:** all of `server/**`
+- **Do not touch:** anything under `extension/`
+
+### screenshot-composer (Lane B) — not started
+- **Agent:** —
+- **Checkout:** worktree `.claude/worktrees/screenshot-composer` (branch `screenshot-composer`, off `feature-screenshot`)
+- **Status:** unclaimed
+- **Owns:** `extension/src/content/panel.ts`, `extension/src/content/panel.css`
+- **Do not touch:** `content.ts`, `apiClient.ts` (integrator), `background.ts`, `context.ts`, `regionCapture.ts` (Lane C)
+
+### screenshot-capture (Lane C) — not started
+- **Agent:** —
+- **Checkout:** worktree `.claude/worktrees/screenshot-capture` (branch `screenshot-capture`, off `feature-screenshot`)
+- **Status:** unclaimed
+- **Owns:** `extension/src/content/regionCapture.ts` (new), `extension/src/background/background.ts`, `extension/src/content/context.ts`, `extension/scripts/browser-check.mjs`
+- **Do not touch:** `panel.ts` — call the `addImage`/`hideForCapture`/`showAfterCapture` interface instead
+
 ### harden-tests-and-edge-cases (formerly "backend") — merged
 - **Agent:** Claude Code
 - **Checkout:** main (`/Users/ayaansarfraz/Documents/SideChats`)
@@ -79,6 +109,8 @@ All 5 worktrees (the original `worktree-sidechats-extension` scaffold plus the 4
 
 Newest first. Keep each note to 1–3 lines. Tag who it's for (`all`, `backend`, `extension`, `cursor`).
 
+- **2026-09-02 (step 0 done) · screenshot-foundation → all** — Screenshot feature started on `feature-screenshot`; the shared contract is committed and both packages are green (107 extension, 21 server). **Measured, not guessed:** `chrome.tabs.captureVisibleTab` needs `<all_urls>` in `host_permissions` — per-site hosts fail, `"tabs"` buys nothing, and `activeTab` fails without a gesture and dies on navigation. Result table in `BUILD_PLAN.md`; content-script `matches` are unchanged, so SideChats still only injects on ChatGPT/Claude. Three parallel lanes fork from here with disjoint file ownership — see `SCREENSHOT_PLAN.md`, which now lives in the repo. **If you take a lane:** read "What Step 0 already put in files the lanes own" first, and if you think the shared contract is wrong, post here rather than editing `shared/types.ts` — one lane changing a shared type silently is how the other two get a merge that type-checks but doesn't work.
+- **2026-09-02 (docs) · readme → all** — Added a top-level `README.md` (what SideChats is, the content-script → service-worker → local-server → Anthropic flow, per-directory layout, setup/run for both halves, tests, MVP in-memory caveat). Docs only, no code touched. Branch `docs-readme` off `origin/main`, PR #4, unmerged. Note for anyone branching: `premium-panel-ui` is already in `origin/main` via PR #3, so local `main` may be behind — fetch before you branch.
 - **2026-09-02 (all merged) · claude-fix + fix-empty-parent-user-message → all** — **Everything is now merged into `main` (`34ae96b`, pushed).** Every outstanding branch and worktree branch was contained in `fix-empty-parent-user-message`, so it went in as one fast-forward: `claude-fix`, `worktree-fix-extension-context-invalidated`, plus this lane's extraction and server fixes. Verified before merging: 72 extension tests, 21 server tests, typecheck and build clean on both packages. **User confirmed the extension works end to end on live chatgpt.com.** The bug that had been failing every send was `textWithoutNoise` measuring inside a `visibility:hidden` host — `innerText` returns rendered text, so it read back `""`, and `rawText`'s `??` never fell back because `""` isn't null. Invisible to jsdom (no `innerText` at all) and missed by `browser-check.mjs` (its fixture puts the action bar outside the turn, so the strip path never ran). **Still worth adding: a real-browser check with a ChatGPT-shaped fixture whose buttons sit *inside* the message** — that's the gap that let this through two layers of tests. Worktrees `claude-ai-support` and `fix-extension-context-invalidated` are fully merged and removable; the latter is locked by a live session, so leave it until that session is done.
 - **2026-09-02 (both fixes integrated) · fix-extension-context-invalidated → all** — `worktree-fix-extension-context-invalidated` now carries **both** fixes, fully integrated and verified together: the MV3 invalidated-context fix (mine) and the claude.ai focus-stealing fix (`claude-fix`, merged in through `71b9c5e`). 72 unit tests, invalidation 7/7, browser check 6/6, typecheck/build clean. Pushed, unmerged — one branch the humans can take for both bugs, or take each lane's separately. Note for the merger: my `inputEl.disabled = true` is now **redundant** against focus-trapping — the claude-fix click-away guard alone prevents it (measured: deleting the disable leaves the check green). It's kept as belt-and-braces, not as the thing carrying that property. Still open and unchanged: live claude.ai verification, which neither agent can do.
 - **2026-09-02 (fixed) · fix-extension-context-invalidated → all** — User reported "Extension context invalidated." in the panel on chatgpt.com. **Not site-specific and not a selector problem** — it's the MV3 lifecycle: Chrome leaves content scripts running in open tabs when an extension is reloaded/updated, but severs their `chrome.runtime` bridge, so every send throws that string and `panel.ts` rendered it verbatim. Reproduces identically on claude.ai. Fixed in `runtime.ts` (new, centralises detection) + `apiClient.ts` + `panel.ts` + `content.ts`: detect the dead context, say what happened and name the remedy, offer a Reload button, disable the input, and withhold the Ask button entirely rather than offering a branch point that fails on submit. Verified by orphaning the content script **for real** (`chrome.runtime.reload()` in the live service worker) — reverting both layers of the fix reproduces the exact screenshot, so the harness bites. 7/7 invalidation checks, 6/6 browser checks, 71 unit tests. Branch `worktree-fix-extension-context-invalidated`, pushed, unmerged.

@@ -283,6 +283,74 @@ As of this review, every worktree (`sidechats-extension`, `context-extraction`, 
 - ~~**No unit tests** for `context.ts`'s DOM-walking logic~~ — ✅ done. `extension/` now runs vitest against jsdom (`npm test`): 23 tests over turn de-duplication, the parent turn pair, prior context, chrome stripping, drag direction, and the ways a selection can be unaskable, for both sites. Plus `npm run check:browser`, which loads the built extension into a real Chromium and drives it with real mouse input.
 - ~~**No typecheck step wired into the build**~~ — ✅ done. `npm run typecheck` exists in `extension/package.json`. It is still not wired into `build`, which continues to strip types without checking them; running it is a convention, not an enforcement.
 
+## Screenshots in side chats (post-MVP, in progress)
+
+Full plan and lane split: `SCREENSHOT_PLAN.md`. Two decisions worth reading here
+because they change the shape of the extension.
+
+### `captureVisibleTab` needs `<all_urls>` — measured, not assumed
+
+Chrome refuses `chrome.tabs.captureVisibleTab` with *"Either the `<all_urls>` or
+`activeTab` permission is required."* A spike loaded four manifest variants into
+a real Chromium on a real `https://claude.ai` origin and called the API from the
+service worker:
+
+| Variant | Result |
+| --- | --- |
+| per-site `host_permissions` only | **failed** |
+| per-site `host_permissions` + `"tabs"` | **failed** — `"tabs"` does not help |
+| `"activeTab"` + `"tabs"`, no gesture | **failed** — grant only exists after invocation |
+| `<all_urls>` in `host_permissions`, **no** `"tabs"` | **captured** |
+
+So: `<all_urls>` is in `host_permissions` and `"tabs"` is deliberately *not*
+added — it buys nothing here.
+
+`activeTab` was the narrower alternative, but it is granted only by invoking the
+extension and is revoked on navigation, which makes a second capture from an
+already-open panel unreliable. Trading a broad permission for a capture that
+sometimes silently fails is the wrong trade for a dev-loaded extension. If this
+ever heads for the Web Store, `optional_host_permissions` is the thing to
+revisit — the listing cost of `<all_urls>` is real.
+
+Note the content script's `matches` list is unchanged: SideChats still only runs
+on ChatGPT and Claude. `<all_urls>` widens what the *worker* may capture, not
+where the extension injects itself.
+
+### Image wire format
+
+`extension/src/shared/types.ts` and `server/src/types.ts` are compiled
+separately and nothing checks them against each other, so the contract is
+written down here as well as typed twice.
+
+```jsonc
+// An image on a request. `images` may appear on POST /api/side-chats and on
+// POST /api/side-chats/:id/messages; `screenshot` only on the former.
+{
+  "id": "uuid",              // client-generated; stable key for tray + thumbnails
+  "mediaType": "image/png",  // one of image/png, image/jpeg, image/webp, image/gif
+  "data": "iVBORw0KGgo…",    // bare base64 — NO "data:…;base64," prefix
+  "width": 1568,             // pixels, after any client-side downscale
+  "height": 784
+}
+```
+
+The extension's `ImageAttachment` carries one extra field, `byteSize`, used to
+enforce the client-side cap. The server ignores it and re-derives size from the
+base64 itself, because a client-reported size is not a limit.
+
+Limits, enforced on the client at capture time and again on the server:
+long edge ≤ 1568px, ≤ 2 MB per image, ≤ 3 images per message, ≤ 5 MB per
+request. `express.json()` is raised from its 100 KB default accordingly.
+
+### Storage
+
+Images live in the same in-memory `Map` as everything else, under the existing
+30-minute idle TTL, so growth is bounded by that and by the 30 req/min rate
+limit. Nothing is written to disk or to `chrome.storage`, unchanged from the
+MVP. A screenshot that seeds a side chat is stored once on the `SideChat` and
+re-sent to the API on every turn — the Anthropic API is stateless, but the
+*extension* only ever uploads those bytes once.
+
 ## Explicitly NOT Building in v1
 
 - Persistent branches / storage across page reloads or browser restarts

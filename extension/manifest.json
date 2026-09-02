@@ -3,12 +3,15 @@
   "name": "SideChats",
   "version": "0.1.0",
   "description": "Contextual side conversations for ChatGPT and Claude.",
-  "permissions": ["storage"],
+  "permissions": [
+    "storage"
+  ],
   "host_permissions": [
     "https://chatgpt.com/*",
     "https://chat.openai.com/*",
     "https://claude.ai/*",
-    "http://localhost:3000/*"
+    "http://localhost:3000/*",
+    "<all_urls>"
   ],
   "background": {
     "service_worker": "background.js",
@@ -21,13 +24,17 @@
         "https://chat.openai.com/*",
         "https://claude.ai/*"
       ],
-      "js": ["content.js"],
+      "js": [
+        "content.js"
+      ],
       "run_at": "document_idle"
     }
   ],
   "web_accessible_resources": [
     {
-      "resources": ["panel.css"],
+      "resources": [
+        "panel.css"
+      ],
       "matches": [
         "https://chatgpt.com/*",
         "https://chat.openai.com/*",

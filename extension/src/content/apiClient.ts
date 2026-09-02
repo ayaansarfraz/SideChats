@@ -1,5 +1,5 @@
 import type { ExtensionRequest, ExtensionResponse } from "../shared/messages";
-import type { ContextPackage } from "../shared/types";
+import type { ContextPackage, ImageAttachment } from "../shared/types";
 import {
   ExtensionContextInvalidatedError,
   isContextInvalidatedError,
@@ -31,14 +31,18 @@ async function sendToBackground(request: ExtensionRequest): Promise<ExtensionRes
 export async function askSideChat(
   ctx: ContextPackage,
   question: string,
+  images: ImageAttachment[] = [],
 ): Promise<{ sideChatId: string; reply: string }> {
   const response = await sendToBackground({
     type: "CREATE_SIDE_CHAT",
-    payload: { ...ctx, question },
+    payload: { ...ctx, question, ...(images.length ? { images } : {}) },
   });
 
   if (!response.ok) {
     throw new Error(response.error);
+  }
+  if (response.kind !== "reply") {
+    throw new Error("Expected a reply from the side chat, got an image.");
   }
 
   return { sideChatId: response.sideChatId, reply: response.reply };
@@ -47,14 +51,18 @@ export async function askSideChat(
 export async function continueSideChat(
   sideChatId: string,
   question: string,
+  images: ImageAttachment[] = [],
 ): Promise<{ reply: string }> {
   const response = await sendToBackground({
     type: "SEND_MESSAGE",
-    payload: { sideChatId, question },
+    payload: { sideChatId, question, ...(images.length ? { images } : {}) },
   });
 
   if (!response.ok) {
     throw new Error(response.error);
+  }
+  if (response.kind !== "reply") {
+    throw new Error("Expected a reply from the side chat, got an image.");
   }
 
   return { reply: response.reply };
