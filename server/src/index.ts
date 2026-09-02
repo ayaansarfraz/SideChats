@@ -1,7 +1,11 @@
 import "dotenv/config";
 import cors from "cors";
 import express from "express";
+import path from "path";
+import { fileURLToPath } from "url";
 import { sideChatsRouter } from "./routes/sideChats.js";
+
+const here = path.dirname(fileURLToPath(import.meta.url));
 
 const app = express();
 const port = Number(process.env.PORT ?? 3000);
@@ -27,6 +31,11 @@ app.use(
   }),
 );
 app.use(express.json());
+
+app.get("/panel.css", (_req, res) => {
+  res.sendFile(path.join(here, "../../extension/src/content/panel.css"));
+});
+app.use(express.static(path.join(here, "../public")));
 
 app.use("/api/side-chats", sideChatsRouter);
 
