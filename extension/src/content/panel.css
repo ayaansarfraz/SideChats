@@ -128,6 +128,25 @@
   border-bottom-left-radius: 4px;
 }
 
+/* Sits inside an error bubble, so it inherits that bubble's colours rather than
+   competing with them — this is the one action left, not a call to action. */
+.sidechats-reload {
+  display: block;
+  margin-top: 8px;
+  padding: 4px 10px;
+  border: 1px solid #8a1f11;
+  border-radius: 6px;
+  background: transparent;
+  color: #8a1f11;
+  font: 600 12px/1.2 inherit;
+  cursor: pointer;
+}
+
+.sidechats-reload:hover {
+  background: #8a1f11;
+  color: #fdecea;
+}
+
 .sidechats-loading {
   align-self: flex-start;
   display: flex;

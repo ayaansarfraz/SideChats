@@ -1,8 +1,31 @@
 import type { ExtensionRequest, ExtensionResponse } from "../shared/messages";
 import type { ContextPackage } from "../shared/types";
+import {
+  ExtensionContextInvalidatedError,
+  isContextInvalidatedError,
+  isExtensionAlive,
+} from "./runtime";
 
-function sendToBackground(request: ExtensionRequest): Promise<ExtensionResponse> {
-  return chrome.runtime.sendMessage(request);
+async function sendToBackground(request: ExtensionRequest): Promise<ExtensionResponse> {
+  // Checked up front so a dead context reads as one clear condition rather than
+  // whatever error the call happens to throw on the way out.
+  if (!isExtensionAlive()) throw new ExtensionContextInvalidatedError();
+
+  let response: ExtensionResponse | undefined;
+  try {
+    response = await chrome.runtime.sendMessage(request);
+  } catch (err) {
+    if (isContextInvalidatedError(err) || !isExtensionAlive()) {
+      throw new ExtensionContextInvalidatedError();
+    }
+    throw err;
+  }
+
+  // sendMessage resolves undefined when nothing answered — the service worker
+  // died mid-flight, or was replaced between the liveness check and the send.
+  if (!response) throw new ExtensionContextInvalidatedError();
+
+  return response;
 }
 
 export async function askSideChat(
