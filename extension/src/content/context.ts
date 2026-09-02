@@ -1,61 +1,154 @@
-import type { ContextPackage } from "../shared/types";
+import type { ContextPackage, Role } from "../shared/types";
+import { getAdapterForHost, type SiteAdapter } from "./adapters";
 
-const ASSISTANT_SELECTOR = '[data-message-author-role="assistant"]';
-const USER_SELECTOR = '[data-message-author-role="user"]';
-const TURN_SELECTOR = '[data-message-author-role]';
+/**
+ * Every conversation turn on the page, outermost-first, in document order.
+ *
+ * An adapter may list several selectors that match the same turn (a wrapper and
+ * the element it wraps). Keeping only elements that no other match contains
+ * collapses each of those groups to one entry, so a turn is never counted twice
+ * and the returned turns are disjoint.
+ */
+export function collectTurns(adapter: SiteAdapter, root: ParentNode): Element[] {
+  const matches = Array.from(root.querySelectorAll<Element>(adapter.turnSelector));
+  return matches.filter(
+    (el) => adapter.roleOf(el) !== null && !matches.some((other) => other !== el && other.contains(el)),
+  );
+}
 
-function closestFrom(node: Node, selector: string): Element | null {
-  const el = node.nodeType === Node.ELEMENT_NODE ? (node as Element) : node.parentElement;
-  return el ? el.closest(selector) : null;
+function elementOf(node: Node | null): Element | null {
+  if (!node) return null;
+  return node.nodeType === Node.ELEMENT_NODE ? (node as Element) : node.parentElement;
+}
+
+/** The turn containing `node`, or `null` if it sits outside the conversation. */
+function turnContaining(turns: Element[], node: Node | null): Element | null {
+  const el = elementOf(node);
+  if (!el) return null;
+  return turns.find((turn) => turn.contains(el)) ?? null;
 }
 
 /**
- * Walks backward through turns in document order rather than relying on
- * `previousElementSibling` — ChatGPT wraps each turn in extra layout divs,
- * so the DOM siblings of a turn element aren't necessarily other turns.
+ * Which turn a selection belongs to.
+ *
+ * The common ancestor is tried first because it is correct for both selection
+ * directions; a backwards drag puts `anchorNode` at the *end* of the selection.
+ * When the selection spans more than one turn the common ancestor is above all
+ * of them and resolves to nothing, so we fall back to the endpoints — matching
+ * the original anchor-only behaviour for that case.
  */
-function previousTurn(all: Element[], fromIndex: number, selector: string): Element | null {
-  for (let i = fromIndex - 1; i >= 0; i--) {
-    if (all[i].matches(selector)) return all[i];
+function resolveTurn(turns: Element[], selection: Selection): Element | null {
+  const range = selection.getRangeAt(0);
+  const candidates: (Node | null)[] = [
+    range.commonAncestorContainer,
+    selection.anchorNode,
+    selection.focusNode,
+  ];
+  for (const candidate of candidates) {
+    const turn = turnContaining(turns, candidate);
+    if (turn) return turn;
   }
   return null;
 }
 
-function innerText(el: Element): string {
+/** Walk backwards from `fromIndex` for the nearest turn with the given role. */
+function previousTurnOfRole(
+  adapter: SiteAdapter,
+  turns: Element[],
+  fromIndex: number,
+  role: Role,
+): Element | null {
+  for (let i = fromIndex - 1; i >= 0; i--) {
+    if (adapter.roleOf(turns[i]) === role) return turns[i];
+  }
+  return null;
+}
+
+function rawText(el: Element): string {
   return (el as HTMLElement).innerText?.trim() ?? el.textContent?.trim() ?? "";
 }
 
-export function getSelectionContext(selection: Selection): ContextPackage | null {
+/**
+ * The turn's text with UI chrome stripped.
+ *
+ * `innerText` needs layout, so a detached clone would silently degrade to
+ * `textContent` and lose every line break. The stripped copy is measured in an
+ * off-screen host attached to the same document instead — same stylesheets,
+ * same line breaking, and the live turn is never mutated.
+ */
+function textWithoutNoise(el: Element, noiseSelector: string): string {
+  const doc = el.ownerDocument;
+  const body = doc?.body;
+  const clone = el.cloneNode(true) as Element;
+  clone.querySelectorAll(noiseSelector).forEach((n) => n.remove());
+  if (!body) return rawText(clone);
+
+  const host = doc.createElement("div");
+  host.style.cssText =
+    "position:absolute;left:-9999px;top:0;width:800px;visibility:hidden;pointer-events:none;";
+  host.appendChild(clone);
+  try {
+    body.appendChild(host);
+    return rawText(clone);
+  } finally {
+    host.remove();
+  }
+}
+
+function turnText(adapter: SiteAdapter, el: Element): string {
+  const noise = adapter.noiseSelectors?.join(",");
+  // Only pay for the off-screen clone when there is actually chrome to strip.
+  if (noise && el.querySelector(noise)) return textWithoutNoise(el, noise);
+  return rawText(el);
+}
+
+/**
+ * Build the context package for a selection, using `adapter` to interpret the
+ * page. Exported separately from `getSelectionContext` so tests can drive it
+ * against a fixture document without stubbing `window.location`.
+ */
+export function extractContext(
+  selection: Selection,
+  adapter: SiteAdapter,
+  root: ParentNode,
+): ContextPackage | null {
   if (!selection || selection.rangeCount === 0) return null;
 
   const selectedText = selection.toString();
   if (!selectedText.trim()) return null;
 
-  const anchorNode = selection.anchorNode;
-  if (!anchorNode) return null;
+  const turns = collectTurns(adapter, root);
+  if (turns.length === 0) return null;
 
-  const assistantTurn = closestFrom(anchorNode, ASSISTANT_SELECTOR);
-  if (!assistantTurn) return null;
+  const turn = resolveTurn(turns, selection);
+  // Side chats branch off what the AI said, so a selection in the user's own
+  // message (or in page furniture outside the conversation) is not askable.
+  if (!turn || adapter.roleOf(turn) !== "assistant") return null;
 
-  const parentAiResponse = innerText(assistantTurn);
+  const assistantIndex = turns.indexOf(turn);
+  const parentAiResponse = turnText(adapter, turn);
 
-  const allTurns = Array.from(document.querySelectorAll<Element>(TURN_SELECTOR));
-  const assistantIndex = allTurns.indexOf(assistantTurn);
-
-  const userTurn =
-    assistantIndex === -1 ? null : previousTurn(allTurns, assistantIndex, USER_SELECTOR);
-  const parentUserMessage = userTurn ? innerText(userTurn) : "";
+  const userTurn = previousTurnOfRole(adapter, turns, assistantIndex, "user");
+  const parentUserMessage = userTurn ? turnText(adapter, userTurn) : "";
 
   let priorContext: string | undefined;
   if (userTurn) {
-    const userIndex = allTurns.indexOf(userTurn);
-    const priorAssistantTurn = previousTurn(allTurns, userIndex, ASSISTANT_SELECTOR);
+    const priorAssistantTurn = previousTurnOfRole(
+      adapter,
+      turns,
+      turns.indexOf(userTurn),
+      "assistant",
+    );
     if (priorAssistantTurn) {
-      const priorAssistantIndex = allTurns.indexOf(priorAssistantTurn);
-      const priorUserTurn = previousTurn(allTurns, priorAssistantIndex, USER_SELECTOR);
+      const priorUserTurn = previousTurnOfRole(
+        adapter,
+        turns,
+        turns.indexOf(priorAssistantTurn),
+        "user",
+      );
       const parts: string[] = [];
-      if (priorUserTurn) parts.push(`User: ${innerText(priorUserTurn)}`);
-      parts.push(`Assistant: ${innerText(priorAssistantTurn)}`);
+      if (priorUserTurn) parts.push(`User: ${turnText(adapter, priorUserTurn)}`);
+      parts.push(`Assistant: ${turnText(adapter, priorAssistantTurn)}`);
       priorContext = parts.join("\n\n");
     }
   }
@@ -66,4 +159,14 @@ export function getSelectionContext(selection: Selection): ContextPackage | null
     parentAiResponse,
     ...(priorContext ? { priorContext } : {}),
   };
+}
+
+/**
+ * Context for the current selection on the current page, or `null` when the
+ * selection isn't inside an AI response on a supported site.
+ */
+export function getSelectionContext(selection: Selection): ContextPackage | null {
+  const adapter = getAdapterForHost(window.location.hostname);
+  if (!adapter) return null;
+  return extractContext(selection, adapter, document);
 }
