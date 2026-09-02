@@ -44,6 +44,28 @@ describe("POST /api/side-chats", () => {
     expect(res.status).toBe(400);
   });
 
+  it("400s when parentUserMessage is missing entirely (not just empty)", async () => {
+    const app = makeApp();
+    const { parentUserMessage, ...rest } = validBody;
+    const res = await request(app).post("/api/side-chats").send(rest);
+    expect(res.status).toBe(400);
+  });
+
+  it("201s with an empty-string parentUserMessage (no preceding user turn in the DOM)", async () => {
+    // The extension sends "" for this on purpose — the first message in a
+    // conversation, or any turn whose preceding user message has scrolled
+    // out of a virtualized DOM (e.g. long ChatGPT threads). Regression test
+    // for a real bug: this used to 400, contradicting context.ts's own
+    // documented/tested behavior of treating "" as valid here.
+    vi.mocked(askSideChat).mockResolvedValue("a real reply");
+    const app = makeApp();
+    const res = await request(app)
+      .post("/api/side-chats")
+      .send({ ...validBody, parentUserMessage: "" });
+    expect(res.status).toBe(201);
+    expect(res.body.reply).toBe("a real reply");
+  });
+
   it("201s with a reply on success", async () => {
     vi.mocked(askSideChat).mockResolvedValue("a real reply");
     const app = makeApp();

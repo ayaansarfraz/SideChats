@@ -7,9 +7,20 @@ export const sideChatsRouter = Router();
 sideChatsRouter.post("/", async (req, res) => {
   const { parentUserMessage, parentAiResponse, selectedText, priorContext, question } = req.body ?? {};
 
-  if (!parentUserMessage || !parentAiResponse || !selectedText || !question) {
+  // parentUserMessage may legitimately be "" — the extension sends that
+  // whenever the DOM has no preceding user turn to find, which happens for
+  // the first message in a conversation and (on sites like ChatGPT that
+  // virtualize long threads) for any turn whose preceding user message has
+  // been unmounted from the DOM after scrolling. Only its type is required,
+  // not that it's non-empty.
+  if (
+    typeof parentUserMessage !== "string" ||
+    !parentAiResponse ||
+    !selectedText ||
+    !question
+  ) {
     res.status(400).json({
-      error: "parentUserMessage, parentAiResponse, selectedText, and question are required",
+      error: "parentUserMessage (string), parentAiResponse, selectedText, and question are required",
     });
     return;
   }
