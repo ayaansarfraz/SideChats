@@ -28,12 +28,25 @@ describe("POST /api/side-chats", () => {
     vi.mocked(askSideChat).mockReset();
   });
 
-  it("400s when a required field is missing", async () => {
+  it("400s when a required field is missing, naming the field", async () => {
     const app = makeApp();
     const { question, ...rest } = validBody;
     const res = await request(app).post("/api/side-chats").send(rest);
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/required/);
+    expect(res.body.error).toContain("question");
+    // Names only what actually failed, so a DOM-extraction regression is
+    // diagnosable from the error alone.
+    expect(res.body.error).not.toContain("selectedText");
+  });
+
+  it("names every failing field when more than one is bad", async () => {
+    const app = makeApp();
+    const res = await request(app)
+      .post("/api/side-chats")
+      .send({ ...validBody, parentAiResponse: "", selectedText: "" });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain("parentAiResponse");
+    expect(res.body.error).toContain("selectedText");
   });
 
   it("400s on an empty-string question", async () => {

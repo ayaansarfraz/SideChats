@@ -13,15 +13,18 @@ sideChatsRouter.post("/", async (req, res) => {
   // virtualize long threads) for any turn whose preceding user message has
   // been unmounted from the DOM after scrolling. Only its type is required,
   // not that it's non-empty.
-  if (
-    typeof parentUserMessage !== "string" ||
-    !parentAiResponse ||
-    !selectedText ||
-    !question
-  ) {
-    res.status(400).json({
-      error: "parentUserMessage (string), parentAiResponse, selectedText, and question are required",
-    });
+  const missing: string[] = [];
+  if (typeof parentUserMessage !== "string") missing.push("parentUserMessage");
+  if (!parentAiResponse) missing.push("parentAiResponse");
+  if (!selectedText) missing.push("selectedText");
+  if (!question) missing.push("question");
+
+  if (missing.length > 0) {
+    // Name the fields that actually failed — a blanket "these four are
+    // required" says nothing about which one the page failed to extract,
+    // which is exactly what you need to know when a site's DOM changes.
+    console.error("[SideChats] rejected create, missing/invalid fields:", missing.join(", "));
+    res.status(400).json({ error: `Missing or empty: ${missing.join(", ")}` });
     return;
   }
 

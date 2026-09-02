@@ -80,7 +80,12 @@ function previousTurnOfRole(
 }
 
 function rawText(el: Element): string {
-  return (el as HTMLElement).innerText?.trim() ?? el.textContent?.trim() ?? "";
+  // Falls back on an *empty* innerText, not just a missing one: innerText is
+  // rendered text, so anything unrendered (or not laid out yet) yields "",
+  // and losing the message entirely is far worse than losing line breaks.
+  const rendered = (el as HTMLElement).innerText?.trim();
+  if (rendered) return rendered;
+  return el.textContent?.trim() ?? "";
 }
 
 /**
@@ -90,6 +95,12 @@ function rawText(el: Element): string {
  * `textContent` and lose every line break. The stripped copy is measured in an
  * off-screen host attached to the same document instead — same stylesheets,
  * same line breaking, and the live turn is never mutated.
+ *
+ * The host must stay *rendered* to be measurable: `innerText` collects rendered
+ * text, and `visibility: hidden` (like `display: none`) renders no text at all,
+ * so measuring inside one returns "" and silently empties the message. Moving
+ * it off-screen hides it from the user while keeping it laid out; it is
+ * appended and removed within one synchronous task, so it is never painted.
  */
 function textWithoutNoise(el: Element, noiseSelector: string): string {
   const doc = el.ownerDocument;
@@ -100,7 +111,7 @@ function textWithoutNoise(el: Element, noiseSelector: string): string {
 
   const host = doc.createElement("div");
   host.style.cssText =
-    "position:absolute;left:-9999px;top:0;width:800px;visibility:hidden;pointer-events:none;";
+    "position:absolute;left:-9999px;top:0;width:800px;pointer-events:none;";
   host.appendChild(clone);
   try {
     body.appendChild(host);
