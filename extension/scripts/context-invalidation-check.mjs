@@ -96,12 +96,13 @@ try {
   );
 
   // Ask a question into the now-orphaned panel: the screenshot's scenario.
-  await page.evaluate(() => {
-    const root = document.getElementById("sidechats-root").shadowRoot;
-    const input = root.querySelector(".sidechats-input");
-    input.value = "what is this place";
-    root.querySelector(".sidechats-send").click();
-  });
+  // Driven with real typing and a real click rather than scripted .click(), so
+  // the last observed mousedown genuinely lands inside the panel. That matters
+  // for the focus check below: it is what stops the claude.ai fix's
+  // click-away guard from short-circuiting the reclaim, leaving the disabled
+  // input as the only thing preventing a focus trap.
+  await page.locator(".sidechats-input").fill("what is this place");
+  await page.locator(".sidechats-send").click();
   await page.waitForTimeout(1200);
 
   const text = (await panelText(page)) ?? "";
@@ -131,8 +132,15 @@ try {
   // The two fixes on this file meet here: the focus-reclaim added for
   // claude.ai's composer refocuses the input whenever focus leaves it while the
   // panel is open, and this state disables that input. Disabling a focused
-  // element blurs it, which fires exactly that reclaim — so check the user is
-  // not left fighting a panel that grabs focus back and cannot be typed into.
+  // element blurs it, which fires exactly that reclaim — a focus trap into an
+  // untypeable field is the failure this asserts against.
+  //
+  // Two independent things now prevent it: focusing a disabled element is a
+  // no-op, and the reclaim skips a focusout whose mousedown landed outside the
+  // panel. Measured, not assumed — deleting `inputEl.disabled = true` leaves
+  // this check green, so today the click-away guard alone carries it. Keep the
+  // check anyway: it pins the user-visible property, and it goes red if both
+  // protections are ever reworked at once.
   await page.evaluate(() => document.querySelector("#target")?.focus?.());
   await page.mouse.click(20, 20);
   await page.waitForTimeout(400);
