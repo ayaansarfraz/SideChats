@@ -8,7 +8,8 @@
     "build": "node build.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "check:browser": "node build.mjs && node scripts/browser-check.mjs"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.287",
