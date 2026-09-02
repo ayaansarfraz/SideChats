@@ -51,12 +51,29 @@ describe("panel focus containment", () => {
     document.body.appendChild(outsideInput);
 
     input.focus();
-    outsideInput.focus(); // simulates the host page's own listener stealing focus
+    // No mousedown precedes this — simulates a host script calling .focus()
+    // programmatically (e.g. from its own keydown handler), not a real click.
+    outsideInput.focus();
 
     await Promise.resolve();
     await Promise.resolve();
 
     expect(host.shadowRoot!.activeElement).toBe(input);
+  });
+
+  it("does not reclaim focus after a deliberate click elsewhere on the page", async () => {
+    const { input } = openPanelInput();
+    const outsideInput = document.createElement("input");
+    document.body.appendChild(outsideInput);
+
+    input.focus();
+    outsideInput.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    outsideInput.focus();
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(document.activeElement).toBe(outsideInput);
   });
 
   it("does not fight focus moving within the panel itself (e.g. to Send)", async () => {
