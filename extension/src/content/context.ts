@@ -31,20 +31,15 @@ function turnContaining(turns: Element[], node: Node | null): Element | null {
 /**
  * Which turn a selection belongs to.
  *
- * The common ancestor is tried first because it is correct for both selection
- * directions; a backwards drag puts `anchorNode` at the *end* of the selection.
- * When the selection spans more than one turn the common ancestor is above all
- * of them and resolves to nothing, so we fall back to the endpoints — matching
- * the original anchor-only behaviour for that case.
+ * The anchor — where the drag started — decides, so a selection that begins in
+ * the user's own message is still not askable even if it runs on into the
+ * reply. `focusNode` is only a fallback for when the anchor lands outside every
+ * turn, which happens when the drag starts in the page margin or the gap
+ * between turns and ends inside an answer; anchor-only extraction dropped those
+ * selections on the floor.
  */
 function resolveTurn(turns: Element[], selection: Selection): Element | null {
-  const range = selection.getRangeAt(0);
-  const candidates: (Node | null)[] = [
-    range.commonAncestorContainer,
-    selection.anchorNode,
-    selection.focusNode,
-  ];
-  for (const candidate of candidates) {
+  for (const candidate of [selection.anchorNode, selection.focusNode]) {
     const turn = turnContaining(turns, candidate);
     if (turn) return turn;
   }
