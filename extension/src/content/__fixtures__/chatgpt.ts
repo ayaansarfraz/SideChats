@@ -1,31 +1,26 @@
 /**
- * Minimal DOM fixture modeling ChatGPT's real turn structure well enough to
+ * Minimal DOM fixture modeling ChatGPT's turn structure well enough to
  * exercise context.ts: each turn is a `[data-message-author-role]` element
- * wrapping a text node, in document order.
+ * wrapping a text node, in document order. Callers are expected to reset
+ * `document.body` between tests (see context.test.ts's afterEach).
  */
 export type FixtureTurn = { role: "user" | "assistant"; text: string };
 
-const FIXTURE_ROOT_ID = "sidechats-fixture-root";
-
-/** Renders turns as children of a container appended to document.body. */
+/** Renders turns as children of `document.body`, in order. */
 export function renderChatGptTurns(turns: FixtureTurn[]): HTMLElement[] {
-  const container = document.createElement("div");
-  container.id = FIXTURE_ROOT_ID;
-  document.body.appendChild(container);
-
   return turns.map(({ role, text }) => {
     const wrapper = document.createElement("div");
     wrapper.setAttribute("data-message-author-role", role);
     const inner = document.createElement("p");
     inner.textContent = text;
     wrapper.appendChild(inner);
-    container.appendChild(wrapper);
+    document.body.appendChild(wrapper);
     return wrapper;
   });
 }
 
-/** Same as renderChatGptTurns, but never appended to document — for exercising
- * the assistantIndex === -1 fallback in context.ts. */
+/** A turn built but never appended to `document` — for exercising the
+ * detached-turn fallback in context.ts's `turnContaining`. */
 export function renderDetachedTurn(turn: FixtureTurn): HTMLElement {
   const wrapper = document.createElement("div");
   wrapper.setAttribute("data-message-author-role", turn.role);
@@ -44,6 +39,11 @@ export function textNodeOf(turn: Element): Text {
   return node as Text;
 }
 
-export function clearFixtures(): void {
-  document.getElementById(FIXTURE_ROOT_ID)?.remove();
+/** Renders plain text directly under document.body — page furniture that
+ * isn't part of any turn. */
+export function renderOutsideText(text: string): HTMLElement {
+  const el = document.createElement("p");
+  el.textContent = text;
+  document.body.appendChild(el);
+  return el;
 }
