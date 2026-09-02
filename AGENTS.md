@@ -33,7 +33,7 @@ Build an MVP browser extension for contextual side chats inside AI chat interfac
 
 1. Simple architecture
 2. Fast iteration
-3. ChatGPT support first
+3. ChatGPT support first, then claude.ai (both shipped — new hosts go behind the `SiteAdapter` layer, see BUILD_PLAN.md)
 4. Highlight text → Ask → sidebar
 5. Preserve parent conversation context
 6. Avoid premature infrastructure
