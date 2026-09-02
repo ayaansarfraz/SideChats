@@ -28,21 +28,21 @@ Do not create a second copy inside a worktree.
 ### screenshot-server (Lane A) — not started
 - **Agent:** —
 - **Checkout:** worktree `.claude/worktrees/screenshot-server` (branch `screenshot-server`, off `feature-screenshot`)
-- **Status:** unclaimed
+- **Status:** unclaimed — worktree created, deps installed, starts green
 - **Owns:** all of `server/**`
 - **Do not touch:** anything under `extension/`
 
 ### screenshot-composer (Lane B) — not started
 - **Agent:** —
 - **Checkout:** worktree `.claude/worktrees/screenshot-composer` (branch `screenshot-composer`, off `feature-screenshot`)
-- **Status:** unclaimed
+- **Status:** unclaimed — worktree created, deps installed, starts green
 - **Owns:** `extension/src/content/panel.ts`, `extension/src/content/panel.css`
 - **Do not touch:** `content.ts`, `apiClient.ts` (integrator), `background.ts`, `context.ts`, `regionCapture.ts` (Lane C)
 
 ### screenshot-capture (Lane C) — not started
 - **Agent:** —
 - **Checkout:** worktree `.claude/worktrees/screenshot-capture` (branch `screenshot-capture`, off `feature-screenshot`)
-- **Status:** unclaimed
+- **Status:** unclaimed — worktree created, deps installed, starts green
 - **Owns:** `extension/src/content/regionCapture.ts` (new), `extension/src/background/background.ts`, `extension/src/content/context.ts`, `extension/scripts/browser-check.mjs`
 - **Do not touch:** `panel.ts` — call the `addImage`/`hideForCapture`/`showAfterCapture` interface instead
 
@@ -109,6 +109,7 @@ All 5 worktrees (the original `worktree-sidechats-extension` scaffold plus the 4
 
 Newest first. Keep each note to 1–3 lines. Tag who it's for (`all`, `backend`, `extension`, `cursor`).
 
+- **2026-09-02 (lanes open) · screenshot-foundation → all** — All three screenshot worktrees exist off `feature-screenshot` @ `e67caea`, deps installed, each verified to start green (server 21 tests; extension 107 tests + 6/6 `check:browser` in a real Chromium, which also confirms the `<all_urls>` manifest change didn't break extension loading). Take a lane by filling in its row above. Nobody merges to `feature-screenshot` except the integrator.
 - **2026-09-02 (step 0 done) · screenshot-foundation → all** — Screenshot feature started on `feature-screenshot`; the shared contract is committed and both packages are green (107 extension, 21 server). **Measured, not guessed:** `chrome.tabs.captureVisibleTab` needs `<all_urls>` in `host_permissions` — per-site hosts fail, `"tabs"` buys nothing, and `activeTab` fails without a gesture and dies on navigation. Result table in `BUILD_PLAN.md`; content-script `matches` are unchanged, so SideChats still only injects on ChatGPT/Claude. Three parallel lanes fork from here with disjoint file ownership — see `SCREENSHOT_PLAN.md`, which now lives in the repo. **If you take a lane:** read "What Step 0 already put in files the lanes own" first, and if you think the shared contract is wrong, post here rather than editing `shared/types.ts` — one lane changing a shared type silently is how the other two get a merge that type-checks but doesn't work.
 - **2026-09-02 (docs) · readme → all** — Added a top-level `README.md` (what SideChats is, the content-script → service-worker → local-server → Anthropic flow, per-directory layout, setup/run for both halves, tests, MVP in-memory caveat). Docs only, no code touched. Branch `docs-readme` off `origin/main`, PR #4, unmerged. Note for anyone branching: `premium-panel-ui` is already in `origin/main` via PR #3, so local `main` may be behind — fetch before you branch.
 - **2026-09-02 (all merged) · claude-fix + fix-empty-parent-user-message → all** — **Everything is now merged into `main` (`34ae96b`, pushed).** Every outstanding branch and worktree branch was contained in `fix-empty-parent-user-message`, so it went in as one fast-forward: `claude-fix`, `worktree-fix-extension-context-invalidated`, plus this lane's extraction and server fixes. Verified before merging: 72 extension tests, 21 server tests, typecheck and build clean on both packages. **User confirmed the extension works end to end on live chatgpt.com.** The bug that had been failing every send was `textWithoutNoise` measuring inside a `visibility:hidden` host — `innerText` returns rendered text, so it read back `""`, and `rawText`'s `??` never fell back because `""` isn't null. Invisible to jsdom (no `innerText` at all) and missed by `browser-check.mjs` (its fixture puts the action bar outside the turn, so the strip path never ran). **Still worth adding: a real-browser check with a ChatGPT-shaped fixture whose buttons sit *inside* the message** — that's the gap that let this through two layers of tests. Worktrees `claude-ai-support` and `fix-extension-context-invalidated` are fully merged and removable; the latter is locked by a live session, so leave it until that session is done.
