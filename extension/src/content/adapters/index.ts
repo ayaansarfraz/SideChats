@@ -1,10 +1,12 @@
 import { chatgptAdapter } from "./chatgpt";
+import { claudeAdapter } from "./claude";
 import { hostMatches, type SiteAdapter } from "./types";
 
 export type { SiteAdapter } from "./types";
 export { chatgptAdapter } from "./chatgpt";
+export { claudeAdapter } from "./claude";
 
-export const ADAPTERS: SiteAdapter[] = [chatgptAdapter];
+export const ADAPTERS: SiteAdapter[] = [chatgptAdapter, claudeAdapter];
 
 /**
  * Pick the adapter for a hostname, or `null` if the extension has no support

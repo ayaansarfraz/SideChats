@@ -2,11 +2,19 @@ import type { ContextPackage } from "../shared/types";
 
 const BUTTON_ID = "sidechats-ask-button";
 const BUTTON_OFFSET_PX = 8;
+const DEFAULT_ACCENT = "#10a37f";
+
+export type AskButtonOptions = {
+  /** Button colour, so it reads as native on whichever site it appears. */
+  accentColor?: string;
+};
 
 export function initAskButton(
   getContext: (selection: Selection) => ContextPackage | null,
   onAsk: (ctx: ContextPackage) => void,
+  options: AskButtonOptions = {},
 ): void {
+  const accentColor = options.accentColor ?? DEFAULT_ACCENT;
   let button: HTMLButtonElement | null = null;
   let currentCtx: ContextPackage | null = null;
 
@@ -52,7 +60,7 @@ export function initAskButton(
     el.style.padding = "4px 10px";
     el.style.borderRadius = "6px";
     el.style.border = "none";
-    el.style.background = "#10a37f";
+    el.style.background = accentColor;
     el.style.color = "#fff";
     el.style.font = "600 13px/1.2 system-ui, sans-serif";
     el.style.cursor = "pointer";
