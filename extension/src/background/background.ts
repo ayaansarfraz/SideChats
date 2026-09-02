@@ -2,7 +2,7 @@ import type { ExtensionRequest, ExtensionResponse } from "../shared/messages";
 
 const API_BASE = "http://localhost:3000/api/side-chats";
 
-async function handleRequest(request: ExtensionRequest): Promise<ExtensionResponse> {
+export async function handleRequest(request: ExtensionRequest): Promise<ExtensionResponse> {
   try {
     if (request.type === "CREATE_SIDE_CHAT") {
       const res = await fetch(API_BASE, {
