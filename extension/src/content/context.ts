@@ -21,11 +21,27 @@ function elementOf(node: Node | null): Element | null {
   return node.nodeType === Node.ELEMENT_NODE ? (node as Element) : node.parentElement;
 }
 
-/** The turn containing `node`, or `null` if it sits outside the conversation. */
-function turnContaining(turns: Element[], node: Node | null): Element | null {
+/**
+ * The turn containing `node`, or `null` if it sits outside the conversation.
+ *
+ * Falls back to walking up from the node when no collected turn contains it,
+ * which covers a turn that has been detached from the document between the
+ * selection and the click — a React re-render mid-stream does exactly that.
+ * Such a turn has no position among the others, so the caller finds no
+ * neighbours for it and the context package comes back with just the response.
+ */
+function turnContaining(
+  adapter: SiteAdapter,
+  turns: Element[],
+  node: Node | null,
+): Element | null {
   const el = elementOf(node);
   if (!el) return null;
-  return turns.find((turn) => turn.contains(el)) ?? null;
+  const attached = turns.find((turn) => turn.contains(el));
+  if (attached) return attached;
+
+  const detached = el.closest(adapter.turnSelector);
+  return detached && adapter.roleOf(detached) !== null ? detached : null;
 }
 
 /**
@@ -38,9 +54,13 @@ function turnContaining(turns: Element[], node: Node | null): Element | null {
  * between turns and ends inside an answer; anchor-only extraction dropped those
  * selections on the floor.
  */
-function resolveTurn(turns: Element[], selection: Selection): Element | null {
+function resolveTurn(
+  adapter: SiteAdapter,
+  turns: Element[],
+  selection: Selection,
+): Element | null {
   for (const candidate of [selection.anchorNode, selection.focusNode]) {
-    const turn = turnContaining(turns, candidate);
+    const turn = turnContaining(adapter, turns, candidate);
     if (turn) return turn;
   }
   return null;
@@ -113,9 +133,7 @@ export function extractContext(
   if (!selectedText.trim()) return null;
 
   const turns = collectTurns(adapter, root);
-  if (turns.length === 0) return null;
-
-  const turn = resolveTurn(turns, selection);
+  const turn = resolveTurn(adapter, turns, selection);
   // Side chats branch off what the AI said, so a selection in the user's own
   // message (or in page furniture outside the conversation) is not askable.
   if (!turn || adapter.roleOf(turn) !== "assistant") return null;

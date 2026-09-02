@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { chatgptAdapter } from "./adapters/chatgpt";
-import { collectTurns, extractContext } from "./context";
+import { collectTurns, extractContext, getSelectionContext } from "./context";
 import { selectText } from "./__fixtures__/selection";
 
 /**
@@ -81,6 +81,38 @@ describe("chatgpt extraction is unchanged by the adapter refactor", () => {
   it("returns null for a selection in the user's own message", () => {
     const selection = selectText(document.body, "at most one");
     expect(extractContext(selection, chatgptAdapter, document.body)).toBeNull();
+  });
+
+  it("still extracts from a turn detached from the document", () => {
+    // A mid-stream React re-render can drop the turn out of the document
+    // between the drag and the click. The turn has no neighbours to walk to,
+    // but its own text is still worth branching from, so this must not go null.
+    const detached = document.createElement("div");
+    detached.setAttribute("data-message-author-role", "assistant");
+    detached.innerHTML = "<div class='markdown'><p>This turn was never attached.</p></div>";
+    const textNode = detached.querySelector("p")!.firstChild!;
+
+    const selection = {
+      rangeCount: 1,
+      toString: () => "never attached",
+      anchorNode: textNode,
+      focusNode: textNode,
+    } as unknown as Selection;
+
+    const ctx = extractContext(selection, chatgptAdapter, document.body)!;
+
+    expect(ctx.parentAiResponse).toBe("This turn was never attached.");
+    expect(ctx.parentUserMessage).toBe("");
+    expect(ctx.priorContext).toBeUndefined();
+  });
+
+  it("resolves the adapter from the page's hostname", () => {
+    // getSelectionContext reads window.location.hostname, which the vitest
+    // config pins to chatgpt.com. This is the wiring the content script uses;
+    // the rest of these tests go through extractContext and would not catch it
+    // breaking.
+    const selection = selectText(document.body, "symmetric difference");
+    expect(getSelectionContext(selection)?.selectedText).toBe("symmetric difference");
   });
 
   it("drops the code block's copy control from the extracted response", () => {
