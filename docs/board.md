@@ -27,7 +27,7 @@ Do not create a second copy inside a worktree.
 
 ### screenshot-server (Lane A) — merged
 - **Agent:** Claude Code
-- **Checkout:** worktree `.claude/worktrees/screenshot-server` (branch `screenshot-server`, off `feature-screenshot`)
+- **Checkout:** — (worktree and local branch removed after merging; history is in `feature-screenshot`)
 - **Status:** merged into `feature-screenshot` (was `screenshot-server` @ `ade912e`)
 - **Working on:** Lane A of `SCREENSHOT_PLAN.md` — done. `express.json({ limit: "12mb" })`, `images`/`screenshot` validation on both POST routes (reusing the `missing: string[]` idiom), the branch-point relaxation that lets a screenshot stand in for `selectedText`/`parentAiResponse`, content-block message construction in `anthropicClient.ts` (images before text, stored screenshot prepended to the first user turn), and the `SELECTED REGION:` prompt branch in `contextPackage.ts`. Tests per the plan's Verification section.
 - **Owns:** all of `server/**`
@@ -36,7 +36,7 @@ Do not create a second copy inside a worktree.
 
 ### screenshot-composer (Lane B) — merged
 - **Agent:** Claude Code
-- **Checkout:** worktree `.claude/worktrees/screenshot-composer` (branch `screenshot-composer`, off `feature-screenshot`)
+- **Checkout:** — (worktree and local branch removed after merging; history is in `feature-screenshot`)
 - **Status:** merged into `feature-screenshot` (was `screenshot-composer` @ `3a6b954`)
 - **Owns:** `extension/src/content/panel.ts`, `extension/src/content/panel.css`
 - **Do not touch:** `content.ts`, `apiClient.ts` (integrator), `background.ts`, `context.ts`, `regionCapture.ts` (Lane C)
@@ -44,7 +44,7 @@ Do not create a second copy inside a worktree.
 
 ### screenshot-capture (Lane C) — merged
 - **Agent:** Claude Code
-- **Checkout:** worktree `.claude/worktrees/screenshot-capture` (branch `screenshot-capture`, off `feature-screenshot`)
+- **Checkout:** — (worktree and local branch removed after merging; history is in `feature-screenshot`)
 - **Status:** merged into `feature-screenshot` (was `screenshot-capture` @ `b2203a4`)
 - **Working on:** Done. Region capture. New `regionCapture.ts` (drag overlay in its own shadow host, live rect, Escape to cancel), `background.ts` (toolbar click -> `START_REGION_CAPTURE`, plus the `CAPTURE_REGION` arm that calls `captureVisibleTab` and crops via `shared/image.ts`), `context.ts` (a region-seeded `ContextPackage` with `screenshot` set and `selectedText` empty), and a real-Chromium `check:browser` case driving an actual mouse drag.
 - **Owns:** `extension/src/content/regionCapture.ts` (new), `extension/src/background/background.ts`, `extension/src/content/context.ts`, `extension/scripts/browser-check.mjs`
@@ -114,6 +114,7 @@ All 5 worktrees (the original `worktree-sidechats-extension` scaffold plus the 4
 
 Newest first. Keep each note to 1–3 lines. Tag who it's for (`all`, `backend`, `extension`, `cursor`).
 
+- **2026-09-02 (cleanup) · screenshot-integration → all** — Removed the three screenshot lane worktrees and their local branches after verifying each was fully merged with zero unpicked commits and a clean working tree. `origin/screenshot-{server,composer,capture}` still exist — left alone pending the PR. Also still present and unrelated to this feature: the older `claude-ai-support` and `fix-extension-context-invalidated` worktrees, both long since merged into `main` and removable whenever someone wants them gone.
 - **2026-09-02 (integrated) · screenshot-integration → all** — **All three screenshot lanes are merged into `feature-screenshot` and the feature works end to end.** The merge itself was clean — ownership held, nothing collided. Two gaps the lanes could not see from inside their own worktrees, both closed: (1) `RegionCaptureDeps.onError` had nothing to bind to — `PanelController` exposed no error surface — so a failed capture would have gone to `console.warn` and nowhere the user looks; added `showError`, which also routes the reloaded-extension message to the panel's existing terminal wall so the Reload button comes with it. (2) Deciding whether a captured image *seeds* a side chat or *stages into* the open one needs `panel.isOpen()`, which nothing exposed; content.ts cannot track it because the user can close the panel with the × button. **One real collision:** Lane C's `browser-check.mjs` injects its own `initRegionCapture` + `START_REGION_CAPTURE` listener as a stand-in for the wiring content.ts didn't have yet — once integration added the real listener, two controllers mounted two overlays under the same id and the check failed on `count() === 1`. The stand-in is now driven by a DOM event and the relay is left to the real wiring, which that first check now proves. Added two end-to-end checks for the seed-vs-stage branch and **mutation-tested both** (inverting the condition either way fails them). **Verified against the live Anthropic API, not just mocks:** a screenshot-seeded side chat came back "A blue square", and a *text-only* follow-up correctly answered "roughly one-quarter" — which is the proof that the server re-sends stored image bytes and the extension never re-uploads them. Server validation and the raised `express.json` limit confirmed with a 3.8 MB body (400 from validation, not 413). Full gate green: extension 163 tests + 15/15 browser + 7/7 invalidation, server 74 tests, typecheck and build clean on both. **Still open:** a pass on live chatgpt.com/claude.ai (everything above is fixture-origin), and there is no in-panel camera button — the toolbar icon is the only way to start a capture, which is fine but worth knowing.
 - **2026-09-02 (shipped) · screenshot-composer (Lane B) → integrator, Lane C, all** — Composer is done and pushed (`screenshot-composer` @ `3a6b954`, off `feature-screenshot` @ `e67caea`, **unmerged**). Only `panel.ts`/`panel.css`/`panel.test.ts` touched. Four ways in, all through `shared/image.ts`: paste into the textarea, a new paperclip file picker, drag-drop anywhere on the panel, and `addImage` for Lane C. Tray chips with × above the input, `hidden` when empty so the composer is byte-identical to today when unused; thumbnails in the user bubble; the header shows `ctx.screenshot` in the excerpt's slot when `selectedText` is empty. 121 unit tests (14 new), typecheck, build, 6/6 `check:browser`, 7/7 `check:invalidation`.
   - **For the integrator, the one ordering trap:** `open()` still resets `pendingImages` (a new branch point is a new side chat). So a captured region that **seeds** a chat has to arrive as `ContextPackage.screenshot` passed to `open()` — Step 0's contract — **not** as an `addImage()` call before `open()`, which would be silently discarded. `addImage` is for adding to a chat already on screen; that's the `hideForCapture`/`showAfterCapture` path and it works.
