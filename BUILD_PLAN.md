@@ -18,7 +18,9 @@ To test that, we need only:
 6. Side panel shows a short back-and-forth thread.
 7. Closing the panel leaves the main ChatGPT conversation untouched.
 
-No persistence across reloads, no Claude.ai support, no accounts, no visualization. Just: highlight → ask → get an answer → close.
+No persistence across reloads, no accounts, no visualization. Just: highlight → ask → get an answer → close.
+
+claude.ai is now supported alongside ChatGPT — see "Supporting more than one site" below. Everything else in this list still stands.
 
 ## Recommended Architecture
 
@@ -82,6 +84,8 @@ Both `chatgpt.com` and the legacy `chat.openai.com` domain are matched since bot
 
 ## Extracting Selected Text + Surrounding Context
 
+> **Now generalised.** The walk described below is still exactly what runs, but the site-specific parts of it — which elements are turns, and which side each turn belongs to — moved behind a `SiteAdapter` so a second host did not mean a second copy of the walk. See "Supporting more than one site".
+
 ChatGPT's DOM is a React SPA with obfuscated/rotating class names, so selectors must anchor on **stable attributes**, not class names. ChatGPT currently marks turns with `[data-message-author-role="assistant"|"user"]`. Plan:
 
 1. Listen for `selectionchange` (debounced) or `mouseup` at the document level.
@@ -95,6 +99,29 @@ ChatGPT's DOM is a React SPA with obfuscated/rotating class names, so selectors 
 Guardrails:
 - Ignore selections that start/end outside any message, or that span multiple messages (MVP: just use the selection's anchor message; don't try to merge context from two messages).
 - Use a `MutationObserver` on the main chat container to detect when new messages appear/stream in, so the click handler for "Ask" always targets settled DOM nodes (avoid grabbing a mid-stream partial response — simplest guard is to only show "Ask" after the send button/stop-generating indicator shows the response is done, or just accept partial text for MVP and iterate).
+
+## Supporting more than one site
+
+`context.ts` is a generic turn-walker. Everything a particular site needs to be understood lives in one `SiteAdapter` under `extension/src/content/adapters/`:
+
+| field | what it does |
+| --- | --- |
+| `hosts` | hostnames the adapter claims, matched exactly or as a subdomain |
+| `turnSelector` | matches every turn, user and assistant |
+| `roleOf(el)` | says which side a matched element is |
+| `noiseSelectors` | in-turn UI chrome to keep out of the extracted text |
+| `accentColor` | colour of the Ask button on that site |
+
+ChatGPT needs almost nothing: one `data-message-author-role` attribute does both the finding and the classifying. claude.ai has no such attribute, so its adapter matches each side with its own list of selectors, ordered most-durable-first. Because `collectTurns` keeps only the outermost element of a nested group, an adapter can list a wrapper *and* the element it wraps as fallbacks for the same turn without that turn being counted twice — which is what makes a fallback chain safe to write.
+
+**To add a third site:**
+
+1. Write `adapters/<site>.ts` and register it in `adapters/index.ts`.
+2. Add the host to `manifest.json` in three places — `host_permissions`, the content script `matches`, and `panel.css`'s `web_accessible_resources`. Missing the third is the quiet one: the panel mounts unstyled rather than failing outright.
+3. Add a fixture under `src/content/__fixtures__/` that reproduces the site's real nesting, not a two-div stand-in — the nesting is what the de-duplication logic is tested against.
+4. Point `scripts/browser-check.mjs` at the new host and run `npm run check:browser`.
+
+**The selectors are the part that rots.** Class names on both sites churn; `data-*` hooks churn more slowly but do change. If side chats stop appearing on a site, its adapter's selector list is the first thing to re-check against the live DOM, and it is the only thing that should need to change.
 
 ## Side Panel Behavior
 
@@ -144,20 +171,33 @@ SideChats/
     ├── manifest.json
     ├── package.json              # esbuild + typescript, dev-only
     ├── tsconfig.json
+    ├── vitest.config.ts          # jsdom, for the DOM-walking tests
+    ├── scripts/
+    │   └── browser-check.mjs     # loads dist/ in real Chromium, drives it with real input
     ├── src/
     │   ├── background/
     │   │   └── background.ts     # relays requests to localhost:3000
     │   ├── content/
     │   │   ├── content.ts        # entry point: wires selection + button + panel
-    │   │   ├── context.ts        # DOM walking / context extraction
+    │   │   ├── context.ts        # generic turn-walking / context extraction
+    │   │   ├── adapters/         # per-site DOM knowledge, one file per host
+    │   │   │   ├── types.ts      # the SiteAdapter interface
+    │   │   │   ├── chatgpt.ts
+    │   │   │   ├── claude.ts
+    │   │   │   └── index.ts      # registry + hostname → adapter
+    │   │   ├── askButton.ts      # selection → "Ask" affordance
+    │   │   ├── apiClient.ts      # talks to background.ts
     │   │   ├── panel.ts          # side panel render + state
-    │   │   └── panel.css
+    │   │   ├── panel.css
+    │   │   └── __fixtures__/     # conversation markup + Selection helpers
     │   └── shared/
     │       ├── types.ts          # mirrors server/src/types.ts
     │       └── messages.ts       # content↔background message protocol
     └── icons/
         └── icon128.png
 ```
+
+Scripts: `npm run build` / `dev` (esbuild), `npm run typecheck`, `npm test` (vitest + jsdom), `npm run check:browser` (real Chromium with the extension loaded).
 
 Build tooling: esbuild bundling `content.ts` → `content.js` and `background.ts` → `background.js` (two entry points, IIFE format for the content script, ESM for the service worker). No React/webpack — keeps the loop fast (`esbuild --watch` + reload unpacked extension).
 
@@ -171,7 +211,7 @@ Build tooling: esbuild bundling `content.ts` → `content.js` and `background.ts
 5. **Wire to backend.** Background worker relay + `fetch` to `localhost:3000`; real question → real Claude reply rendered in the panel.
 6. **Follow-up turns.** Reuse `sideChatId` for subsequent questions in the same panel session.
 7. **Polish.** Loading/error states, close/reopen behavior, basic styling pass, handle no-selection/edge cases gracefully.
-8. **(Stretch, only if time remains)** Claude.ai selector support, behind the same extraction interface.
+8. **claude.ai selector support, behind the same extraction interface.** — ✅ done. Shipped as a `SiteAdapter` layer rather than a second branch inside `context.ts`; see below.
 
 ## Major Technical Risks / Unknowns
 
@@ -240,12 +280,11 @@ As of this review, every worktree (`sidechats-extension`, `context-extraction`, 
 
 - ~~**CORS is prefix-matched, not exact**~~ — ✅ done. `server/src/index.ts` now parses `origin` with `new URL()` and checks `protocol === "chrome-extension:"` or exact `hostname === "localhost"`, instead of `startsWith`.
 - ~~**Redundant CSS injection**~~ — ✅ done. Dropped the `css` key from `manifest.json`'s content script entry (`side-panel` worktree); `web_accessible_resources` still serves `panel.css` to the Shadow DOM fetch in `panel.ts`.
-- **No unit tests** for `context.ts`'s DOM-walking logic — the single most complex, highest-risk piece of logic in the system. The Playwright fixtures already built by Track A/B for manual checks would make cheap jsdom/happy-dom regression tests.
-- **No typecheck step wired into the build** — `extension/package.json` only has `dev`/`build` (esbuild strips types without checking them). `npx tsc --noEmit` currently passes clean in every worktree and in a merged integration test, but nothing enforces that going forward; consider adding a `typecheck` script.
+- ~~**No unit tests** for `context.ts`'s DOM-walking logic~~ — ✅ done. `extension/` now runs vitest against jsdom (`npm test`): 23 tests over turn de-duplication, the parent turn pair, prior context, chrome stripping, drag direction, and the ways a selection can be unaskable, for both sites. Plus `npm run check:browser`, which loads the built extension into a real Chromium and drives it with real mouse input.
+- ~~**No typecheck step wired into the build**~~ — ✅ done. `npm run typecheck` exists in `extension/package.json`. It is still not wired into `build`, which continues to strip types without checking them; running it is a convention, not an enforcement.
 
 ## Explicitly NOT Building in v1
 
-- Claude.ai support (ChatGPT only first, per `AGENTS.md`)
 - Persistent branches / storage across page reloads or browser restarts
 - Reopening past side chats, or any indicator that a message "has branches"
 - Promote-to-main / merge-back-into-conversation
