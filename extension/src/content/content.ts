@@ -3,6 +3,7 @@ import { getAdapterForHost } from "./adapters";
 import { initAskButton } from "./askButton";
 import { createPanel } from "./panel";
 import { askSideChat, continueSideChat } from "./apiClient";
+import { isExtensionAlive } from "./runtime";
 
 const adapter = getAdapterForHost(window.location.hostname);
 
@@ -28,7 +29,13 @@ if (!adapter) {
     },
   });
 
-  initAskButton(getSelectionContext, (ctx) => panel.open(ctx), {
-    accentColor: adapter.accentColor,
-  });
+  initAskButton(
+    // A content script outlives the extension that injected it, so once the
+    // extension is reloaded this one is still listening on a page it can no
+    // longer act for. Withholding the button is the honest response: offering
+    // "Ask" and then failing on submit is worse than not offering it.
+    (selection) => (isExtensionAlive() ? getSelectionContext(selection) : null),
+    (ctx) => panel.open(ctx),
+    { accentColor: adapter.accentColor },
+  );
 }

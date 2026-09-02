@@ -1,4 +1,5 @@
 import type { ChatMessage, ContextPackage, SideChatState } from "../shared/types";
+import { EXTENSION_RELOADED_MESSAGE, isContextInvalidatedError } from "./runtime";
 
 export type PanelDeps = {
   onSubmit: (
@@ -22,9 +23,18 @@ let cachedCssPromise: Promise<string> | null = null;
 // injected into this panel's own shadow root explicitly.
 function loadPanelCss(): Promise<string> {
   if (!cachedCssPromise) {
-    cachedCssPromise = fetch(chrome.runtime.getURL("panel.css"))
-      .then((res) => res.text())
-      .catch(() => "");
+    // `chrome.runtime.getURL` throws synchronously once the extension context
+    // is gone, which would otherwise take down ensureMounted() and with it the
+    // panel that is supposed to be explaining the problem. An unstyled panel
+    // carrying a readable message beats no panel at all.
+    cachedCssPromise = (async () => {
+      try {
+        const res = await fetch(chrome.runtime.getURL("panel.css"));
+        return await res.text();
+      } catch {
+        return "";
+      }
+    })();
   }
   return cachedCssPromise;
 }
@@ -44,14 +54,50 @@ function emptyState(ctx: ContextPackage): SideChatState {
   };
 }
 
+// Host pages often listen globally for "start typing anywhere" (to refocus their
+// own composer) or for clicks/keydowns to close their own popovers. Because our
+// input lives in a shadow tree, an event.target read from outside the shadow
+// boundary is retargeted to the shadow host — a plain <div> — so a host page's
+// "skip if the user is already in an input" check silently fails to recognise
+// our textarea and steals focus right back the moment the user types. Contained
+// here at the shadow host, in the bubble phase, before it can reach any
+// document/body-level listener the host page registered.
+const CONTAINED_EVENTS = ["keydown", "keyup", "keypress", "input", "mousedown", "mouseup", "click"] as const;
+
 export function createPanel(deps: PanelDeps): PanelController {
   let shadowRoot: ShadowRoot | null = null;
+  let host: HTMLDivElement;
   let panelEl: HTMLDivElement;
   let headerPreviewEl: HTMLDivElement;
   let bodyEl: HTMLDivElement;
   let inputEl: HTMLTextAreaElement;
   let sendBtn: HTMLButtonElement;
   let loadingEl: HTMLDivElement | null = null;
+  // Once the extension context is gone the panel is read-only until reload.
+  let contextLost = false;
+  let reclaimingFocus = false;
+  // The most recent mousedown anywhere in the document, observed (not
+  // intercepted) so the reclaim logic below can tell a deliberate click
+  // elsewhere on the page apart from a host script yanking focus via a
+  // keydown handler with no click behind it at all. Doesn't catch a
+  // deliberate keyboard Tab out of the panel — there's no mousedown to
+  // observe in that case — but that's a much rarer path into this panel
+  // than a click, and reclaiming too eagerly there is the safer failure mode.
+  // `host` is unset until ensureMounted() runs (the panel hasn't opened yet),
+  // so host?.contains(...) is undefined and every mousedown reads as
+  // "outside" until then — correct, since there's nothing to reclaim focus
+  // into before the panel exists, not just an accident of the optional chain.
+  let lastMousedownWasOutsidePanel = false;
+  // createPanel is called once per content-script load (see content.ts), so
+  // this listener is meant to live for the page's lifetime and is never
+  // removed; revisit if createPanel is ever called more than once.
+  document.addEventListener(
+    "mousedown",
+    (event) => {
+      lastMousedownWasOutsidePanel = !(event.target instanceof Node && host?.contains(event.target));
+    },
+    true,
+  );
 
   let state: SideChatState = emptyState({
     selectedText: "",
@@ -62,10 +108,14 @@ export function createPanel(deps: PanelDeps): PanelController {
   function ensureMounted(): void {
     if (shadowRoot) return;
 
-    const host = document.createElement("div");
+    host = document.createElement("div");
     host.id = HOST_ID;
     document.body.appendChild(host);
     shadowRoot = host.attachShadow({ mode: "open" });
+
+    for (const type of CONTAINED_EVENTS) {
+      host.addEventListener(type, (event) => event.stopPropagation());
+    }
 
     const styleEl = document.createElement("style");
     shadowRoot.appendChild(styleEl);
@@ -107,6 +157,24 @@ export function createPanel(deps: PanelDeps): PanelController {
         event.preventDefault();
         void submit();
       }
+    });
+    // Backstop for interference the containment listeners above can't reach —
+    // e.g. a capture-phase listener on the host page's document, which fires
+    // before events ever reach our shadow host. If focus lands somewhere
+    // outside this panel right after leaving the input while the panel is
+    // still open, claim it back rather than leaving the user typing into a
+    // page they never meant to click into.
+    inputEl.addEventListener("focusout", () => {
+      if (reclaimingFocus) return;
+      const deliberateClickElsewhere = lastMousedownWasOutsidePanel;
+      queueMicrotask(() => {
+        if (!panelEl.classList.contains("sidechats-open")) return;
+        if (document.activeElement === host) return;
+        if (deliberateClickElsewhere) return;
+        reclaimingFocus = true;
+        inputEl.focus();
+        reclaimingFocus = false;
+      });
     });
 
     sendBtn = document.createElement("button");
@@ -168,9 +236,36 @@ export function createPanel(deps: PanelDeps): PanelController {
     scrollToBottom();
   }
 
+  /**
+   * Terminal error state: the panel cannot reach the extension any more, and no
+   * retry will change that until the page is reloaded. So say so, offer the one
+   * action that works, and shut off the input rather than letting the user type
+   * into something that can only fail again.
+   */
+  function renderExtensionReloaded(): void {
+    const bubble = document.createElement("div");
+    bubble.className = "sidechats-bubble sidechats-bubble--error";
+    bubble.textContent = EXTENSION_RELOADED_MESSAGE;
+
+    const reload = document.createElement("button");
+    reload.type = "button";
+    reload.className = "sidechats-reload";
+    reload.textContent = "Reload page";
+    reload.addEventListener("click", () => window.location.reload());
+    bubble.appendChild(reload);
+
+    bodyEl.appendChild(bubble);
+    scrollToBottom();
+
+    inputEl.disabled = true;
+    inputEl.placeholder = "Reload the page to continue";
+    sendBtn.disabled = true;
+    contextLost = true;
+  }
+
   async function submit(): Promise<void> {
     const question = inputEl.value.trim();
-    if (!question || state.status === "loading") return;
+    if (!question || state.status === "loading" || contextLost) return;
 
     inputEl.value = "";
     autoResize(inputEl);
@@ -220,17 +315,35 @@ export function createPanel(deps: PanelDeps): PanelController {
       }
     } catch (err) {
       hideLoading();
+      if (isContextInvalidatedError(err)) {
+        // Chrome's own wording here is "Extension context invalidated.", which
+        // tells the user nothing about what to do about it.
+        state = { ...state, status: "error", error: EXTENSION_RELOADED_MESSAGE };
+        renderExtensionReloaded();
+        return;
+      }
       const messageText = err instanceof Error ? err.message : "Something went wrong.";
       state = { ...state, status: "error", error: messageText };
       renderError(messageText);
     } finally {
-      sendBtn.disabled = false;
-      inputEl.focus();
+      if (!contextLost) {
+        sendBtn.disabled = false;
+        inputEl.focus();
+      }
     }
   }
 
   function open(ctx: ContextPackage): void {
     ensureMounted();
+
+    if (contextLost) {
+      // Reopening cannot help; only a page reload can. Show the same wall.
+      bodyEl.innerHTML = "";
+      headerPreviewEl.textContent = truncate(ctx.selectedText, PREVIEW_MAX_CHARS);
+      renderExtensionReloaded();
+      panelEl.classList.add("sidechats-open");
+      return;
+    }
 
     state = emptyState(ctx);
     hideLoading();
