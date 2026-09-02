@@ -43,7 +43,7 @@ export function removeSideChat(id: string): boolean {
   return sideChats.delete(id);
 }
 
-function sweepIdleSideChats() {
+export function sweepIdleSideChats() {
   const cutoff = Date.now() - IDLE_TTL_MS;
   for (const [id, sideChat] of sideChats) {
     if (sideChat.lastActiveAt < cutoff) {
