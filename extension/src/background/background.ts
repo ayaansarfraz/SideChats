@@ -13,7 +13,7 @@ async function handleRequest(request: ExtensionRequest): Promise<ExtensionRespon
 
       if (!res.ok) {
         const error = await extractError(res);
-        return { ok: false, error };
+        return { ok: false, error, errorType: "http" };
       }
 
       const data = (await res.json()) as { sideChatId: string; reply: string };
@@ -30,14 +30,14 @@ async function handleRequest(request: ExtensionRequest): Promise<ExtensionRespon
 
     if (!res.ok) {
       const error = await extractError(res);
-      return { ok: false, error };
+      return { ok: false, error, errorType: "http" };
     }
 
     const data = (await res.json()) as { reply: string };
     return { ok: true, sideChatId, reply: data.reply };
   } catch (err) {
     const message = err instanceof Error ? err.message : "Network request failed";
-    return { ok: false, error: message };
+    return { ok: false, error: message, errorType: "network" };
   }
 }
 

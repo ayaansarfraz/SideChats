@@ -15,4 +15,4 @@ export type ExtensionRequest = CreateSideChatRequest | SendMessageRequest;
 
 export type ExtensionResponse =
   | { ok: true; sideChatId: string; reply: string }
-  | { ok: false; error: string };
+  | { ok: false; error: string; errorType: "network" | "http" };
