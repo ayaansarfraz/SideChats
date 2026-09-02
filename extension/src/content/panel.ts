@@ -51,6 +51,14 @@ export type PanelController = {
    */
   hideForCapture: () => void;
   showAfterCapture: () => void;
+  /** Whether the panel is currently on screen. */
+  isOpen: () => boolean;
+  /**
+   * Show a message from outside the panel — a region capture that failed, say.
+   * Opens the panel if it isn't already up, because a caller that has no side
+   * chat on screen has nowhere else to put it.
+   */
+  showError: (message: string) => void;
 };
 
 const HOST_ID = "sidechats-root";
@@ -691,6 +699,29 @@ export function createPanel(deps: PanelDeps): PanelController {
     renderTray();
   }
 
+  function isOpen(): boolean {
+    return panelEl?.classList.contains("sidechats-open") ?? false;
+  }
+
+  function showError(message: string): void {
+    ensureMounted();
+    if (!isOpen()) {
+      // Nothing that came before belongs to this message — the panel was not
+      // even open. Clear rather than appending an error under a stale thread.
+      bodyEl.innerHTML = "";
+      panelEl.classList.add("sidechats-open");
+    }
+    // A capture can be the first thing to notice the extension was reloaded.
+    // Route it to the terminal state rather than rendering the same sentence as
+    // an ordinary bubble, so the Reload button and the shut-off input come with
+    // it exactly as they do when a send is what discovers the dead context.
+    if (message === EXTENSION_RELOADED_MESSAGE) {
+      renderExtensionReloaded();
+      return;
+    }
+    renderError(message);
+  }
+
   function hideForCapture(): void {
     if (host) host.style.visibility = "hidden";
   }
@@ -699,5 +730,5 @@ export function createPanel(deps: PanelDeps): PanelController {
     if (host) host.style.visibility = "";
   }
 
-  return { open, close, addImage, hideForCapture, showAfterCapture };
+  return { open, close, addImage, hideForCapture, showAfterCapture, isOpen, showError };
 }

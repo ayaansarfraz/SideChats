@@ -75,8 +75,13 @@ function check(name, ok, detail = "") {
 }
 
 /**
- * The stand-in for content.ts\'s region-capture wiring, injected as an extra
- * content script.
+ * A second, instrumented region-capture controller, injected as an extra
+ * content script, used for the pixel assertions below.
+ *
+ * It deliberately does *not* listen for START_REGION_CAPTURE: content.ts wires
+ * a real controller to that message now, and two listeners means two overlays
+ * mounting under the same id. So this one is driven by a DOM event, and the
+ * worker relay is left to the real wiring — which the first check exercises.
  *
  * It talks to the checks through the DOM rather than through globals, because
  * a content script runs in an isolated world and `page.evaluate` runs in the
@@ -131,10 +136,7 @@ const capture = initRegionCapture(
   },
 );
 
-chrome.runtime.onMessage.addListener((message) => {
-  if (message && message.type === "START_REGION_CAPTURE") capture.start();
-  return false;
-});
+document.addEventListener("sidechats-check:start-capture", () => capture.start());
 `;
 
 const extDir = mkdtempSync(join(tmpdir(), "sidechats-check-ext-"));
@@ -265,20 +267,35 @@ try {
   await startCapture();
   const overlay = page.locator("#sidechats-capture-root");
   await overlay.waitFor({ state: "attached", timeout: 5000 }).catch(() => {});
-  const overlayMounted = (await overlay.count()) === 1;
-  check("START_REGION_CAPTURE from the worker mounts the capture overlay", overlayMounted);
+  // Exactly one: content.ts is the only thing wired to the relay. Two would
+  // mean a duplicate controller mounting a second overlay under the same id.
+  const overlayCount = await overlay.count();
+  const overlayMounted = overlayCount === 1;
+  check(
+    "START_REGION_CAPTURE from the worker mounts the overlay content.ts wired up",
+    overlayMounted,
+    `overlay count = ${overlayCount}`,
+  );
   if (!overlayMounted) throw new StopEarly();
 
   await page.keyboard.press("Escape");
   await page.waitForTimeout(200);
   check("Escape dismisses the overlay without capturing", (await overlay.count()) === 0);
 
+  // The instrumented controller, for the pixel assertions. Driven directly so
+  // it never races the real one over the same relay.
+  const startHarnessCapture = async () => {
+    await page.evaluate(() =>
+      document.dispatchEvent(new CustomEvent("sidechats-check:start-capture")),
+    );
+  };
+
   // Arm the stand-in panel, so a capture that fails to hide it comes back red.
   await page.evaluate(() =>
     document.dispatchEvent(new CustomEvent("sidechats-check:arm-panel")),
   );
   const targetBox = await page.locator("#capture-target").boundingBox();
-  await startCapture();
+  await startHarnessCapture();
   await overlay.waitFor({ state: "attached", timeout: 5000 });
 
   // A genuine mouse drag across the target, corner to corner.
@@ -357,6 +374,68 @@ try {
       parentUserMessage: result.parentUserMessage,
       hasScreenshot: result.hasScreenshot,
     }).slice(0, 300),
+  );
+
+  // ------------------------------------------------- the real wiring, end to end
+  //
+  // Everything above drives the instrumented controller, so none of it touches
+  // content.ts's decision about where a captured image goes. That decision is
+  // the whole of the integration: with no panel on screen a capture seeds a new
+  // side chat, and with one open it stages into that conversation instead.
+
+  await page.evaluate(() => {
+    const host = document.getElementById("sidechats-root");
+    host?.shadowRoot?.querySelector(".sidechats-close")?.click();
+    document.getElementById("sidechats-fake-panel")?.remove();
+  });
+  await page.waitForTimeout(200);
+
+  const dragTarget = async () => {
+    const box = await page.locator("#capture-target").boundingBox();
+    await page.mouse.move(box.x, box.y);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width, box.y + box.height, { steps: 25 });
+    await page.mouse.up();
+    await page.waitForTimeout(1200);
+  };
+
+  await startCapture();
+  await overlay.waitFor({ state: "attached", timeout: 5000 });
+  await dragTarget();
+
+  const seeded = await page.evaluate(() => {
+    const root = document.getElementById("sidechats-root")?.shadowRoot;
+    const panel = root?.querySelector(".sidechats-panel");
+    return {
+      open: Boolean(panel?.classList.contains("sidechats-open")),
+      thumb: root?.querySelector(".sidechats-header-thumb")?.getAttribute("src")?.slice(0, 22) ?? null,
+      chips: root?.querySelectorAll(".sidechats-chip").length ?? 0,
+    };
+  });
+  check(
+    "a capture with no panel open seeds a side chat with the region as its branch point",
+    seeded.open && (seeded.thumb ?? "").startsWith("data:image/") && seeded.chips === 0,
+    JSON.stringify(seeded),
+  );
+
+  // Same gesture again, but now the panel is up: it must attach to the open
+  // conversation rather than replacing it with a fresh one.
+  await startCapture();
+  await overlay.waitFor({ state: "attached", timeout: 5000 });
+  await dragTarget();
+
+  const staged = await page.evaluate(() => {
+    const root = document.getElementById("sidechats-root")?.shadowRoot;
+    return {
+      chips: root?.querySelectorAll(".sidechats-chip").length ?? 0,
+      trayHidden: root?.querySelector(".sidechats-tray")?.hidden ?? null,
+      thumbStillThere: Boolean(root?.querySelector(".sidechats-header-thumb")),
+    };
+  });
+  check(
+    "a capture while the panel is open stages into that conversation instead",
+    staged.chips === 1 && staged.trayHidden === false && staged.thumbStillThere,
+    JSON.stringify(staged),
   );
 } catch (err) {
   if (!(err instanceof StopEarly)) throw err;

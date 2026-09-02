@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ImageAttachment } from "../shared/types";
 import { MAX_IMAGES_PER_MESSAGE } from "../shared/image";
 import { createPanel } from "./panel";
+import { EXTENSION_RELOADED_MESSAGE } from "./runtime";
 
 /**
  * Regression cover for a real bug report: typing into the panel's input
@@ -338,5 +339,72 @@ describe("panel header for a captured region", () => {
 
     expect(root.querySelector(".sidechats-header-thumb")).toBeNull();
     expect(root.querySelector(".sidechats-header-preview")!.textContent).toBe("timeslice");
+  });
+});
+
+/**
+ * `isOpen` and `showError` exist for the region-capture wiring in content.ts:
+ * it has to know whether a captured image seeds a new side chat or stages into
+ * the one already on screen, and a capture that fails needs somewhere to say so
+ * even when no side chat exists yet.
+ */
+describe("panel surface for region capture", () => {
+  const shadow = () => document.getElementById("sidechats-root")!.shadowRoot!;
+
+  it("reports open state across open and close", () => {
+    const panel = createPanel({ onSubmit: vi.fn() });
+    expect(panel.isOpen()).toBe(false);
+
+    panel.open(ctx);
+    expect(panel.isOpen()).toBe(true);
+
+    panel.close();
+    expect(panel.isOpen()).toBe(false);
+  });
+
+  it("is not open merely because an image was staged into it", () => {
+    const panel = createPanel({ onSubmit: vi.fn() });
+    panel.addImage({
+      id: "a",
+      mediaType: "image/png",
+      data: "aGk=",
+      width: 8,
+      height: 8,
+      byteSize: 2,
+    });
+    // addImage mounts the composer so it has somewhere to stage into, but
+    // mounting is not showing — content.ts branches on this exact distinction.
+    expect(panel.isOpen()).toBe(false);
+  });
+
+  it("opens the panel to show an error raised before any side chat exists", () => {
+    const panel = createPanel({ onSubmit: vi.fn() });
+    panel.showError("Couldn't capture that region.");
+
+    expect(panel.isOpen()).toBe(true);
+    expect(shadow().querySelector(".sidechats-bubble--error")?.textContent).toBe(
+      "Couldn't capture that region.",
+    );
+  });
+
+  it("appends to an open conversation instead of clearing it", () => {
+    const panel = createPanel({ onSubmit: vi.fn() });
+    panel.open(ctx);
+    const before = shadow().querySelector(".sidechats-empty");
+    expect(before).not.toBeNull();
+
+    panel.showError("Couldn't capture that region.");
+
+    expect(shadow().querySelector(".sidechats-empty")).not.toBeNull();
+    expect(shadow().querySelector(".sidechats-bubble--error")).not.toBeNull();
+  });
+
+  it("routes a reloaded-extension message to the terminal wall, not a plain bubble", () => {
+    const panel = createPanel({ onSubmit: vi.fn() });
+    panel.showError(EXTENSION_RELOADED_MESSAGE);
+
+    const input = shadow().querySelector(".sidechats-input") as HTMLTextAreaElement;
+    expect(shadow().querySelector(".sidechats-reload")).not.toBeNull();
+    expect(input.disabled).toBe(true);
   });
 });
