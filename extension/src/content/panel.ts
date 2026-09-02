@@ -1,12 +1,27 @@
 import type { ChatMessage, ContextPackage, SideChatState } from "../shared/types";
 import { EXTENSION_RELOADED_MESSAGE, isContextInvalidatedError } from "./runtime";
+import { renderMarkdown } from "./markdown";
 
 export type PanelDeps = {
+  /** Host site's accent, piped through to the panel's own palette. */
+  accentColor?: string;
   onSubmit: (
     question: string,
     state: SideChatState
   ) => Promise<{ reply: string; sideChatId?: string } | { error: string }>;
 };
+
+const DEFAULT_ACCENT = "#5b5bd6";
+
+// Inline so the panel never depends on a network fetch or a font the host
+// page's CSP might refuse. `currentColor` lets each button own its colour.
+const ICON_CLOSE =
+  '<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">' +
+  '<path d="M4 4l8 8M12 4l-8 8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>';
+const ICON_SEND =
+  '<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">' +
+  '<path d="M8 13V3M8 3L3.5 7.5M8 3l4.5 4.5" fill="none" stroke="currentColor" stroke-width="1.7" ' +
+  'stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
 export type PanelController = {
   open: (ctx: ContextPackage) => void;
@@ -68,7 +83,7 @@ export function createPanel(deps: PanelDeps): PanelController {
   let shadowRoot: ShadowRoot | null = null;
   let host: HTMLDivElement;
   let panelEl: HTMLDivElement;
-  let headerPreviewEl: HTMLDivElement;
+  let headerPreviewEl: HTMLElement;
   let bodyEl: HTMLDivElement;
   let inputEl: HTMLTextAreaElement;
   let sendBtn: HTMLButtonElement;
@@ -125,21 +140,33 @@ export function createPanel(deps: PanelDeps): PanelController {
 
     panelEl = document.createElement("div");
     panelEl.className = "sidechats-panel";
+    panelEl.style.setProperty("--sc-accent", deps.accentColor ?? DEFAULT_ACCENT);
 
     const header = document.createElement("div");
     header.className = "sidechats-header";
 
-    headerPreviewEl = document.createElement("div");
+    const headerText = document.createElement("div");
+    headerText.className = "sidechats-header-text";
+
+    const eyebrow = document.createElement("div");
+    eyebrow.className = "sidechats-eyebrow";
+    eyebrow.textContent = "Asking about";
+
+    // The excerpt is why this panel exists at all, so it's quoted material and
+    // marked up as such rather than being a caption on the close button.
+    headerPreviewEl = document.createElement("blockquote");
     headerPreviewEl.className = "sidechats-header-preview";
+
+    headerText.append(eyebrow, headerPreviewEl);
 
     const closeBtn = document.createElement("button");
     closeBtn.type = "button";
     closeBtn.className = "sidechats-close";
     closeBtn.setAttribute("aria-label", "Close side chat");
-    closeBtn.textContent = "×";
+    closeBtn.innerHTML = ICON_CLOSE;
     closeBtn.addEventListener("click", () => close());
 
-    header.append(headerPreviewEl, closeBtn);
+    header.append(headerText, closeBtn);
 
     bodyEl = document.createElement("div");
     bodyEl.className = "sidechats-body";
@@ -149,7 +176,7 @@ export function createPanel(deps: PanelDeps): PanelController {
 
     inputEl = document.createElement("textarea");
     inputEl.className = "sidechats-input";
-    inputEl.placeholder = "Ask about this...";
+    inputEl.placeholder = "Ask about this…";
     inputEl.rows = 1;
     inputEl.addEventListener("input", () => autoResize(inputEl));
     inputEl.addEventListener("keydown", (event) => {
@@ -180,7 +207,8 @@ export function createPanel(deps: PanelDeps): PanelController {
     sendBtn = document.createElement("button");
     sendBtn.type = "button";
     sendBtn.className = "sidechats-send";
-    sendBtn.textContent = "Send";
+    sendBtn.setAttribute("aria-label", "Send question");
+    sendBtn.innerHTML = ICON_SEND;
     sendBtn.addEventListener("click", () => void submit());
 
     inputRow.append(inputEl, sendBtn);
@@ -201,14 +229,31 @@ export function createPanel(deps: PanelDeps): PanelController {
     bodyEl.innerHTML = "";
     const empty = document.createElement("div");
     empty.className = "sidechats-empty";
-    empty.textContent = "Ask a question about the highlighted text.";
+
+    const lead = document.createElement("p");
+    lead.className = "sidechats-empty-lead";
+    lead.textContent = "Ask anything about this line.";
+
+    // The reassurance is the product's whole promise, and this is the moment
+    // the reader is deciding whether to trust it.
+    const note = document.createElement("p");
+    note.className = "sidechats-empty-note";
+    note.textContent = "Your main conversation stays untouched.";
+
+    empty.append(lead, note);
     bodyEl.appendChild(empty);
   }
 
   function renderMessage(message: ChatMessage): void {
     const bubble = document.createElement("div");
     bubble.className = `sidechats-bubble sidechats-bubble--${message.role}`;
-    bubble.textContent = message.content;
+    if (message.role === "assistant") {
+      // Answers come back as Markdown; the user's own question is shown
+      // exactly as they typed it.
+      bubble.appendChild(renderMarkdown(message.content, document));
+    } else {
+      bubble.textContent = message.content;
+    }
     bodyEl.appendChild(bubble);
     scrollToBottom();
   }
