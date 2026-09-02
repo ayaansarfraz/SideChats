@@ -19,6 +19,9 @@ if (!adapter) {
   console.log(`[SideChats] loaded on ${window.location.hostname} (${adapter.label} adapter)`);
 
   const panel = createPanel({
+    // The panel signs itself in the host site's own accent, so it reads as
+    // deliberate next to whichever product it is overlaying.
+    accentColor: adapter.accentColor,
     onSubmit: async (question, state) => {
       if (!state.sideChatId) {
         const { sideChatId, reply } = await askSideChat(state.contextPackage, question);
