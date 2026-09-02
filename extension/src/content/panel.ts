@@ -1,4 +1,11 @@
 import type { ChatMessage, ContextPackage, ImageAttachment, SideChatState } from "../shared/types";
+import {
+  ImageRejectedError,
+  MAX_IMAGES_PER_MESSAGE,
+  SUPPORTED_MEDIA_TYPES,
+  processImage,
+  toDataUrl,
+} from "../shared/image";
 import { EXTENSION_RELOADED_MESSAGE, isContextInvalidatedError } from "./runtime";
 import { renderMarkdown } from "./markdown";
 
@@ -23,6 +30,14 @@ const ICON_SEND =
   '<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">' +
   '<path d="M8 13V3M8 3L3.5 7.5M8 3l4.5 4.5" fill="none" stroke="currentColor" stroke-width="1.7" ' +
   'stroke-linecap="round" stroke-linejoin="round"/></svg>';
+const ICON_ATTACH =
+  '<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">' +
+  '<path d="M12.4 7.3l-4.6 4.6a2.6 2.6 0 0 1-3.7-3.7l5.2-5.2a1.8 1.8 0 0 1 2.5 2.5l-5.1 5.1a0.9 0.9 0 0 1-1.3-1.3l4.4-4.4" ' +
+  'fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+// Smaller than ICON_CLOSE and drawn to sit on a dark scrim over a thumbnail.
+const ICON_CHIP_REMOVE =
+  '<svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true" focusable="false">' +
+  '<path d="M4.5 4.5l7 7M11.5 4.5l-7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
 
 export type PanelController = {
   open: (ctx: ContextPackage) => void;
@@ -88,7 +103,33 @@ function emptyState(ctx: ContextPackage): SideChatState {
 // our textarea and steals focus right back the moment the user types. Contained
 // here at the shadow host, in the bubble phase, before it can reach any
 // document/body-level listener the host page registered.
-const CONTAINED_EVENTS = ["keydown", "keyup", "keypress", "input", "mousedown", "mouseup", "click"] as const;
+// `paste` and the drag events are here for a second reason on top of focus:
+// the composer consumes an image paste or drop itself, and a host page with its
+// own document-level paste/drop handler would otherwise *also* act on it and
+// drop the same screenshot into its own composer.
+const CONTAINED_EVENTS = [
+  "keydown",
+  "keyup",
+  "keypress",
+  "input",
+  "mousedown",
+  "mouseup",
+  "click",
+  "paste",
+  "dragenter",
+  "dragover",
+  "dragleave",
+  "drop",
+] as const;
+
+const FILE_INPUT_ACCEPT = SUPPORTED_MEDIA_TYPES.join(",");
+
+const TOO_MANY_IMAGES_MESSAGE = `You can attach up to ${MAX_IMAGES_PER_MESSAGE} images per message.`;
+
+/** True for a drag carrying files, which is all `dataTransfer` will admit to mid-drag. */
+function isFileDrag(dataTransfer: DataTransfer | null): boolean {
+  return !!dataTransfer && Array.from(dataTransfer.types).includes("Files");
+}
 
 export function createPanel(deps: PanelDeps): PanelController {
   let shadowRoot: ShadowRoot | null = null;
@@ -98,7 +139,14 @@ export function createPanel(deps: PanelDeps): PanelController {
   let bodyEl: HTMLDivElement;
   let inputEl: HTMLTextAreaElement;
   let sendBtn: HTMLButtonElement;
+  let trayEl: HTMLDivElement;
+  let fileInputEl: HTMLInputElement;
   let loadingEl: HTMLDivElement | null = null;
+  // dragenter/dragleave fire for every child the pointer crosses, so a plain
+  // "remove the class on dragleave" flickers the highlight off the moment the
+  // drag moves over the textarea. Counting entries against leaves is the usual
+  // fix and the only reliable one without hit-testing coordinates.
+  let dragDepth = 0;
   // Once the extension context is gone the panel is read-only until reload.
   let contextLost = false;
   let reclaimingFocus = false;
@@ -215,6 +263,16 @@ export function createPanel(deps: PanelDeps): PanelController {
       });
     });
 
+    // A screenshot pasted into the composer is the fastest path there is from
+    // "look at this" to a question about it, so it is handled here rather than
+    // being left to the file picker. Text pastes fall through untouched.
+    inputEl.addEventListener("paste", (event) => {
+      const files = imageFilesFromClipboard(event.clipboardData);
+      if (files.length === 0) return;
+      event.preventDefault();
+      void stageFiles(files);
+    });
+
     sendBtn = document.createElement("button");
     sendBtn.type = "button";
     sendBtn.className = "sidechats-send";
@@ -222,9 +280,107 @@ export function createPanel(deps: PanelDeps): PanelController {
     sendBtn.innerHTML = ICON_SEND;
     sendBtn.addEventListener("click", () => void submit());
 
-    inputRow.append(inputEl, sendBtn);
-    panelEl.append(header, bodyEl, inputRow);
+    fileInputEl = document.createElement("input");
+    fileInputEl.type = "file";
+    fileInputEl.className = "sidechats-file-input";
+    fileInputEl.accept = FILE_INPUT_ACCEPT;
+    fileInputEl.multiple = true;
+    fileInputEl.hidden = true;
+    fileInputEl.addEventListener("change", () => {
+      const files = Array.from(fileInputEl.files ?? []);
+      // Cleared before staging so picking the same file twice in a row still
+      // fires a change event the second time.
+      fileInputEl.value = "";
+      if (files.length > 0) void stageFiles(files);
+    });
+
+    const attachBtn = document.createElement("button");
+    attachBtn.type = "button";
+    attachBtn.className = "sidechats-attach";
+    attachBtn.setAttribute("aria-label", "Attach an image");
+    attachBtn.innerHTML = ICON_ATTACH;
+    attachBtn.addEventListener("click", () => fileInputEl.click());
+
+    trayEl = document.createElement("div");
+    trayEl.className = "sidechats-tray";
+    trayEl.hidden = true;
+
+    inputRow.append(attachBtn, inputEl, sendBtn, fileInputEl);
+
+    // The tray and the input row are one control, so they share a container and
+    // a single top border rather than stacking two rules on top of each other.
+    const composer = document.createElement("div");
+    composer.className = "sidechats-composer";
+    composer.append(trayEl, inputRow);
+
+    panelEl.addEventListener("dragenter", (event) => {
+      if (!isFileDrag(event.dataTransfer)) return;
+      event.preventDefault();
+      dragDepth += 1;
+      panelEl.classList.add("sidechats-dropping");
+    });
+    panelEl.addEventListener("dragover", (event) => {
+      if (!isFileDrag(event.dataTransfer)) return;
+      // Without preventDefault on *dragover* specifically the browser refuses
+      // the drop and navigates to the file instead.
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+    });
+    panelEl.addEventListener("dragleave", () => {
+      dragDepth = Math.max(0, dragDepth - 1);
+      if (dragDepth === 0) panelEl.classList.remove("sidechats-dropping");
+    });
+    panelEl.addEventListener("drop", (event) => {
+      if (!isFileDrag(event.dataTransfer)) return;
+      event.preventDefault();
+      dragDepth = 0;
+      panelEl.classList.remove("sidechats-dropping");
+      const files = Array.from(event.dataTransfer?.files ?? []).filter((file) =>
+        file.type.startsWith("image/"),
+      );
+      if (files.length > 0) void stageFiles(files);
+    });
+
+    panelEl.append(header, bodyEl, composer);
     shadowRoot.appendChild(panelEl);
+  }
+
+  function imageFilesFromClipboard(clipboardData: DataTransfer | null): File[] {
+    const items = clipboardData?.items;
+    if (!items) return [];
+    const files: File[] = [];
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item.kind !== "file" || !item.type.startsWith("image/")) continue;
+      const file = item.getAsFile();
+      if (file) files.push(file);
+    }
+    return files;
+  }
+
+  /**
+   * Take raw files from a paste, a drop, or the file picker and stage whatever
+   * of them can be staged. One bad file doesn't cost the user the good ones:
+   * each is reported on its own through the panel's existing error surface.
+   */
+  async function stageFiles(files: readonly Blob[]): Promise<void> {
+    ensureMounted();
+    // Nothing staged here could ever be sent, and the panel is already showing
+    // the reload wall that explains why.
+    if (contextLost) return;
+    for (const file of files) {
+      if (state.pendingImages.length >= MAX_IMAGES_PER_MESSAGE) {
+        renderError(TOO_MANY_IMAGES_MESSAGE);
+        return;
+      }
+      try {
+        addImage(await processImage(file));
+      } catch (err) {
+        renderError(
+          err instanceof ImageRejectedError ? err.message : "Could not attach that image.",
+        );
+      }
+    }
   }
 
   function autoResize(el: HTMLTextAreaElement): void {
@@ -255,6 +411,60 @@ export function createPanel(deps: PanelDeps): PanelController {
     bodyEl.appendChild(empty);
   }
 
+  /**
+   * The staged images, as thumbnails above the input. Empty means `hidden`, so
+   * a composer nobody has attached anything to looks exactly as it did before
+   * images existed.
+   */
+  function renderTray(): void {
+    trayEl.innerHTML = "";
+    trayEl.hidden = state.pendingImages.length === 0;
+
+    for (const image of state.pendingImages) {
+      const chip = document.createElement("div");
+      chip.className = "sidechats-chip";
+      chip.dataset.imageId = image.id;
+
+      const thumb = document.createElement("img");
+      thumb.className = "sidechats-chip-thumb";
+      thumb.src = toDataUrl(image);
+      thumb.alt = "Attached image";
+
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "sidechats-chip-remove";
+      remove.setAttribute("aria-label", "Remove attached image");
+      remove.innerHTML = ICON_CHIP_REMOVE;
+      remove.addEventListener("click", () => removeImage(image.id));
+
+      chip.append(thumb, remove);
+      trayEl.appendChild(chip);
+    }
+  }
+
+  function removeImage(id: string): void {
+    state = { ...state, pendingImages: state.pendingImages.filter((image) => image.id !== id) };
+    renderTray();
+  }
+
+  /** Thumbnails for a message that carried images, built as elements — never innerHTML. */
+  function renderImages(images: ImageAttachment[], className: string): HTMLDivElement {
+    const gallery = document.createElement("div");
+    gallery.className = className;
+    // One image is the subject of the question and gets the room to be read;
+    // several are a set, and letting each have that much height would push the
+    // answer — the thing the user is waiting for — off the bottom of the panel.
+    if (images.length > 1) gallery.classList.add("sidechats-bubble-images--multi");
+    for (const image of images) {
+      const img = document.createElement("img");
+      img.className = "sidechats-message-image";
+      img.src = toDataUrl(image);
+      img.alt = "Attached image";
+      gallery.appendChild(img);
+    }
+    return gallery;
+  }
+
   function renderMessage(message: ChatMessage): void {
     const bubble = document.createElement("div");
     bubble.className = `sidechats-bubble sidechats-bubble--${message.role}`;
@@ -262,6 +472,18 @@ export function createPanel(deps: PanelDeps): PanelController {
       // Answers come back as Markdown; the user's own question is shown
       // exactly as they typed it.
       bubble.appendChild(renderMarkdown(message.content, document));
+    } else if (message.images?.length) {
+      // Images above the words, matching both the order they are sent to the
+      // model in and the order the user staged them.
+      bubble.appendChild(renderImages(message.images, "sidechats-bubble-images"));
+      if (message.content) {
+        const text = document.createElement("div");
+        text.className = "sidechats-bubble-text";
+        text.textContent = message.content;
+        bubble.appendChild(text);
+      } else {
+        bubble.classList.add("sidechats-bubble--media-only");
+      }
     } else {
       bubble.textContent = message.content;
     }
@@ -319,9 +541,34 @@ export function createPanel(deps: PanelDeps): PanelController {
     contextLost = true;
   }
 
+  /**
+   * The excerpt the side chat is branching off. Usually the highlighted text;
+   * when a region was captured with nothing selected, the picture *is* the
+   * excerpt, so it takes the same slot under the same eyebrow.
+   */
+  function renderHeaderPreview(ctx: ContextPackage): void {
+    const text = truncate(ctx.selectedText, PREVIEW_MAX_CHARS);
+    headerPreviewEl.textContent = "";
+    headerPreviewEl.classList.toggle("sidechats-header-preview--image", !text && !!ctx.screenshot);
+
+    if (!text && ctx.screenshot) {
+      const thumb = document.createElement("img");
+      thumb.className = "sidechats-header-thumb";
+      thumb.src = toDataUrl(ctx.screenshot);
+      thumb.alt = "Captured region of the page";
+      headerPreviewEl.appendChild(thumb);
+      return;
+    }
+
+    headerPreviewEl.textContent = text;
+  }
+
   async function submit(): Promise<void> {
     const question = inputEl.value.trim();
-    if (!question || state.status === "loading" || contextLost) return;
+    const images = state.pendingImages;
+    // An image with no words is a legitimate "what is this?" — the server's
+    // prompt carries the question in that case.
+    if ((!question && images.length === 0) || state.status === "loading" || contextLost) return;
 
     inputEl.value = "";
     autoResize(inputEl);
@@ -329,13 +576,22 @@ export function createPanel(deps: PanelDeps): PanelController {
     const requestState: SideChatState = { ...state };
     const isFirstMessage = state.messages.length === 0;
 
-    const userMessage: ChatMessage = { role: "user", content: question };
+    const userMessage: ChatMessage = {
+      role: "user",
+      content: question,
+      ...(images.length > 0 ? { images } : {}),
+    };
     state = {
       ...state,
       messages: [...state.messages, userMessage],
       status: "loading",
       error: undefined,
+      // Staged images belong to the message now, so the tray empties as the
+      // send starts rather than after it succeeds — otherwise a failed send
+      // would leave them staged and they would ride along again on the retry.
+      pendingImages: [],
     };
+    renderTray();
 
     if (isFirstMessage) {
       bodyEl.innerHTML = "";
@@ -395,15 +651,21 @@ export function createPanel(deps: PanelDeps): PanelController {
     if (contextLost) {
       // Reopening cannot help; only a page reload can. Show the same wall.
       bodyEl.innerHTML = "";
-      headerPreviewEl.textContent = truncate(ctx.selectedText, PREVIEW_MAX_CHARS);
+      renderHeaderPreview(ctx);
       renderExtensionReloaded();
       panelEl.classList.add("sidechats-open");
       return;
     }
 
+    // A new branch point is a new side chat, so anything staged for the old one
+    // goes with it. That means a captured region that *seeds* a chat has to
+    // arrive as `ctx.screenshot`, not as an addImage() before open() — which is
+    // how Step 0's contract has it. addImage is for adding to a chat already on
+    // screen.
     state = emptyState(ctx);
     hideLoading();
-    headerPreviewEl.textContent = truncate(ctx.selectedText, PREVIEW_MAX_CHARS);
+    renderHeaderPreview(ctx);
+    renderTray();
     renderEmptyState();
     inputEl.value = "";
     autoResize(inputEl);
@@ -417,7 +679,16 @@ export function createPanel(deps: PanelDeps): PanelController {
   }
 
   function addImage(image: ImageAttachment): void {
+    // Callable before the panel has ever been opened, so the composer has to
+    // exist before it can be staged into.
+    ensureMounted();
+    if (contextLost) return;
+    if (state.pendingImages.length >= MAX_IMAGES_PER_MESSAGE) {
+      renderError(TOO_MANY_IMAGES_MESSAGE);
+      return;
+    }
     state = { ...state, pendingImages: [...state.pendingImages, image] };
+    renderTray();
   }
 
   function hideForCapture(): void {
