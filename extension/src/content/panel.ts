@@ -76,6 +76,21 @@ export function createPanel(deps: PanelDeps): PanelController {
   // Once the extension context is gone the panel is read-only until reload.
   let contextLost = false;
   let reclaimingFocus = false;
+  // The most recent mousedown anywhere in the document, observed (not
+  // intercepted) so the reclaim logic below can tell a deliberate click
+  // elsewhere on the page apart from a host script yanking focus via a
+  // keydown handler with no click behind it at all. Doesn't catch a
+  // deliberate keyboard Tab out of the panel — there's no mousedown to
+  // observe in that case — but that's a much rarer path into this panel
+  // than a click, and reclaiming too eagerly there is the safer failure mode.
+  let lastMousedownWasOutsidePanel = false;
+  document.addEventListener(
+    "mousedown",
+    (event) => {
+      lastMousedownWasOutsidePanel = !(event.target instanceof Node && host?.contains(event.target));
+    },
+    true,
+  );
 
   let state: SideChatState = emptyState({
     selectedText: "",
@@ -144,9 +159,11 @@ export function createPanel(deps: PanelDeps): PanelController {
     // page they never meant to click into.
     inputEl.addEventListener("focusout", () => {
       if (reclaimingFocus) return;
+      const deliberateClickElsewhere = lastMousedownWasOutsidePanel;
       queueMicrotask(() => {
         if (!panelEl.classList.contains("sidechats-open")) return;
         if (document.activeElement === host) return;
+        if (deliberateClickElsewhere) return;
         reclaimingFocus = true;
         inputEl.focus();
         reclaimingFocus = false;
