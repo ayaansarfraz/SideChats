@@ -71,7 +71,14 @@ export function createPanel(deps: PanelDeps): PanelController {
   // deliberate keyboard Tab out of the panel — there's no mousedown to
   // observe in that case — but that's a much rarer path into this panel
   // than a click, and reclaiming too eagerly there is the safer failure mode.
+  // `host` is unset until ensureMounted() runs (the panel hasn't opened yet),
+  // so host?.contains(...) is undefined and every mousedown reads as
+  // "outside" until then — correct, since there's nothing to reclaim focus
+  // into before the panel exists, not just an accident of the optional chain.
   let lastMousedownWasOutsidePanel = false;
+  // createPanel is called once per content-script load (see content.ts), so
+  // this listener is meant to live for the page's lifetime and is never
+  // removed; revisit if createPanel is ever called more than once.
   document.addEventListener(
     "mousedown",
     (event) => {
