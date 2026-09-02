@@ -24,6 +24,7 @@ sideChatsRouter.post("/", async (req, res) => {
     ]);
     res.status(201).json({ sideChatId: sideChat.id, reply });
   } catch (err) {
+    console.error("[SideChats] askSideChat failed (create):", err);
     removeSideChat(sideChat.id);
     res.status(502).json({ error: "Failed to get a reply from the model" });
   }
@@ -50,6 +51,7 @@ sideChatsRouter.post("/:id/messages", async (req, res) => {
     ]);
     res.json({ reply });
   } catch (err) {
+    console.error("[SideChats] askSideChat failed (continue):", err);
     res.status(502).json({ error: "Failed to get a reply from the model" });
   }
 });

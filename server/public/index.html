@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SideChats — local preview</title>
+  <link rel="stylesheet" href="/panel.css" />
+  <style>
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: #f7f7f8;
+      color: #0d0d0d;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+    .chat {
+      max-width: 720px;
+      padding: 40px 28px 80px;
+    }
+    .kicker {
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #6b6b73;
+      margin: 0 0 8px;
+    }
+    h1 { font-size: 22px; margin: 0 0 24px; }
+    .turn { margin: 0 0 20px; padding: 14px 16px; border-radius: 12px; }
+    .user { background: #ececf1; }
+    .assistant { background: #fff; border: 1px solid #e6e6e9; }
+    .role { font-size: 12px; font-weight: 600; color: #6b6b73; margin-bottom: 6px; }
+    mark { background: #ffe14a; padding: 0 2px; }
+    .note { color: #6b6b73; font-size: 13px; max-width: 42rem; }
+    .sidechats-panel { visibility: visible; transform: none; }
+  </style>
+</head>
+<body>
+  <main class="chat">
+    <p class="kicker">Local preview · not ChatGPT</p>
+    <h1>Highlight → Ask → side chat</h1>
+    <p class="note">This is the panel we built, talking to the real local API. On ChatGPT the same UI opens from the extension after you load <code>extension/dist</code> unpacked.</p>
+    <article class="turn user" data-message-author-role="user">
+      <div class="role">You</div>
+      Explain why every tree has at most one perfect matching.
+    </article>
+    <article class="turn assistant" data-message-author-role="assistant">
+      <div class="role">ChatGPT</div>
+      A tree is acyclic, so the <mark>symmetric difference</mark> of two perfect matchings would form cycles. That contradiction means there can be at most one.
+    </article>
+  </main>
+
+  <aside class="sidechats-panel sidechats-open" id="panel">
+    <div class="sidechats-header">
+      <div class="sidechats-header-preview">“symmetric difference”</div>
+      <button class="sidechats-close" type="button" aria-label="Close">×</button>
+    </div>
+    <div class="sidechats-body" id="body">
+      <p class="sidechats-empty">Ask about this…</p>
+    </div>
+    <div class="sidechats-input-row">
+      <textarea class="sidechats-input" id="input" rows="1" placeholder="Ask about this..."></textarea>
+      <button class="sidechats-send" id="send" type="button">Send</button>
+    </div>
+  </aside>
+
+  <script>
+    const body = document.getElementById("body");
+    const input = document.getElementById("input");
+    const send = document.getElementById("send");
+    let sideChatId = null;
+
+    function bubble(text, kind) {
+      const el = document.createElement("div");
+      el.className = "sidechats-bubble sidechats-bubble--" + kind;
+      el.textContent = text;
+      return el;
+    }
+
+    async function submit() {
+      const question = input.value.trim();
+      if (!question) return;
+      input.value = "";
+      body.querySelector(".sidechats-empty")?.remove();
+      body.appendChild(bubble(question, "user"));
+      const loading = document.createElement("div");
+      loading.className = "sidechats-loading";
+      loading.innerHTML = "<span></span><span></span><span></span>";
+      body.appendChild(loading);
+      send.disabled = true;
+      try {
+        const url = sideChatId
+          ? "/api/side-chats/" + sideChatId + "/messages"
+          : "/api/side-chats";
+        const payload = sideChatId
+          ? { question }
+          : {
+              selectedText: "symmetric difference",
+              parentUserMessage: "Explain why every tree has at most one perfect matching.",
+              parentAiResponse: "A tree is acyclic, so the symmetric difference of two perfect matchings would form cycles.",
+              question,
+            };
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json().catch(() => ({}));
+        loading.remove();
+        if (!res.ok) {
+          body.appendChild(bubble(data.error || "Request failed (" + res.status + ")", "error"));
+          return;
+        }
+        sideChatId = data.sideChatId || sideChatId;
+        body.appendChild(bubble(data.reply || "(empty reply)", "assistant"));
+      } catch (err) {
+        loading.remove();
+        body.appendChild(bubble(String(err), "error"));
+      } finally {
+        send.disabled = false;
+      }
+    }
+
+    send.addEventListener("click", () => void submit());
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        void submit();
+      }
+    });
+  </script>
+</body>
+</html>

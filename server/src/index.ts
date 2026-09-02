@@ -1,7 +1,12 @@
 import "dotenv/config";
 import cors from "cors";
-import express from "express";
+import express, { type ErrorRequestHandler } from "express";
+import rateLimit from "express-rate-limit";
+import path from "path";
+import { fileURLToPath } from "url";
 import { sideChatsRouter } from "./routes/sideChats.js";
+
+const here = path.dirname(fileURLToPath(import.meta.url));
 
 const app = express();
 const port = Number(process.env.PORT ?? 3000);
@@ -28,7 +33,27 @@ app.use(
 );
 app.use(express.json());
 
-app.use("/api/side-chats", sideChatsRouter);
+const handleJsonParseError: ErrorRequestHandler = (err, _req, res, next) => {
+  if (err instanceof SyntaxError && "body" in err) {
+    res.status(400).json({ error: "Invalid JSON body" });
+    return;
+  }
+  next(err);
+};
+app.use(handleJsonParseError);
+
+app.get("/panel.css", (_req, res) => {
+  res.sendFile(path.join(here, "../../extension/src/content/panel.css"));
+});
+app.use(express.static(path.join(here, "../public")));
+
+const sideChatsLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+app.use("/api/side-chats", sideChatsLimiter, sideChatsRouter);
 
 app.get("/health", (_req, res) => {
   res.json({ ok: true });
