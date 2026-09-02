@@ -128,6 +128,20 @@ try {
   });
   check("the input is shut off rather than inviting another doomed send", inputDisabled);
 
+  // The two fixes on this file meet here: the focus-reclaim added for
+  // claude.ai's composer refocuses the input whenever focus leaves it while the
+  // panel is open, and this state disables that input. Disabling a focused
+  // element blurs it, which fires exactly that reclaim — so check the user is
+  // not left fighting a panel that grabs focus back and cannot be typed into.
+  await page.evaluate(() => document.querySelector("#target")?.focus?.());
+  await page.mouse.click(20, 20);
+  await page.waitForTimeout(400);
+  const focusTrapped = await page.evaluate(() => {
+    const root = document.getElementById("sidechats-root").shadowRoot;
+    return root.activeElement === root.querySelector(".sidechats-input");
+  });
+  check("focus is not trapped in the disabled input", !focusTrapped);
+
   // No recovery check here. `chrome.runtime.reload()` under Playwright's
   // `--load-extension` does not bring the extension back (0 service workers
   // afterwards, no content script on new pages), so a "fresh page works again"

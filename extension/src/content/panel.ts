@@ -54,8 +54,19 @@ function emptyState(ctx: ContextPackage): SideChatState {
   };
 }
 
+// Host pages often listen globally for "start typing anywhere" (to refocus their
+// own composer) or for clicks/keydowns to close their own popovers. Because our
+// input lives in a shadow tree, an event.target read from outside the shadow
+// boundary is retargeted to the shadow host — a plain <div> — so a host page's
+// "skip if the user is already in an input" check silently fails to recognise
+// our textarea and steals focus right back the moment the user types. Contained
+// here at the shadow host, in the bubble phase, before it can reach any
+// document/body-level listener the host page registered.
+const CONTAINED_EVENTS = ["keydown", "keyup", "keypress", "input", "mousedown", "mouseup", "click"] as const;
+
 export function createPanel(deps: PanelDeps): PanelController {
   let shadowRoot: ShadowRoot | null = null;
+  let host: HTMLDivElement;
   let panelEl: HTMLDivElement;
   let headerPreviewEl: HTMLDivElement;
   let bodyEl: HTMLDivElement;
@@ -64,6 +75,7 @@ export function createPanel(deps: PanelDeps): PanelController {
   let loadingEl: HTMLDivElement | null = null;
   // Once the extension context is gone the panel is read-only until reload.
   let contextLost = false;
+  let reclaimingFocus = false;
 
   let state: SideChatState = emptyState({
     selectedText: "",
@@ -74,10 +86,14 @@ export function createPanel(deps: PanelDeps): PanelController {
   function ensureMounted(): void {
     if (shadowRoot) return;
 
-    const host = document.createElement("div");
+    host = document.createElement("div");
     host.id = HOST_ID;
     document.body.appendChild(host);
     shadowRoot = host.attachShadow({ mode: "open" });
+
+    for (const type of CONTAINED_EVENTS) {
+      host.addEventListener(type, (event) => event.stopPropagation());
+    }
 
     const styleEl = document.createElement("style");
     shadowRoot.appendChild(styleEl);
@@ -119,6 +135,22 @@ export function createPanel(deps: PanelDeps): PanelController {
         event.preventDefault();
         void submit();
       }
+    });
+    // Backstop for interference the containment listeners above can't reach —
+    // e.g. a capture-phase listener on the host page's document, which fires
+    // before events ever reach our shadow host. If focus lands somewhere
+    // outside this panel right after leaving the input while the panel is
+    // still open, claim it back rather than leaving the user typing into a
+    // page they never meant to click into.
+    inputEl.addEventListener("focusout", () => {
+      if (reclaimingFocus) return;
+      queueMicrotask(() => {
+        if (!panelEl.classList.contains("sidechats-open")) return;
+        if (document.activeElement === host) return;
+        reclaimingFocus = true;
+        inputEl.focus();
+        reclaimingFocus = false;
+      });
     });
 
     sendBtn = document.createElement("button");
