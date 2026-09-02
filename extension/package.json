@@ -10,6 +10,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "check:browser": "node build.mjs && node scripts/browser-check.mjs",
+    "check:live": "node build.mjs && node scripts/live-check.mjs",
     "check:invalidation": "node build.mjs && node scripts/context-invalidation-check.mjs"
   },
   "devDependencies": {

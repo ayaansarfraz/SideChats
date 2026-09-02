@@ -47,7 +47,9 @@ cd server    && npm test
 cd extension && npm test        # plus: npm run typecheck, npm run check:browser
 ```
 
-`check:browser` is the one that matters most: it loads the built extension into a real Chromium, drives a genuine mouse drag, and inspects the captured pixels — including a check that the panel isn't inside its own screenshot, which no amount of jsdom can tell you.
+`check:browser` is the one that matters most day to day: it loads the built extension into a real Chromium, drives a genuine mouse drag, and inspects the captured pixels — including a check that the panel isn't inside its own screenshot, which no amount of jsdom can tell you.
+
+`npm run check:live` goes one further and is opt-in, because it needs the server running and spends a few real API tokens. It drives the actual extension against the actual server: capture a region, paste an image, attach a file, and confirm the model names a colour that appears nowhere in the page's text — so a reply can only have come from the image itself. It exists because that seam is the one nothing type-checks; `extension/` and `server/` declare their image types separately.
 
 ## Status
 
