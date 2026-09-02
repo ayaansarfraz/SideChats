@@ -1,0 +1,8 @@
+{
+  // The build config excludes tests so they stay out of dist/. They still need
+  // type-checking, so `npm run typecheck` uses this one instead.
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "noEmit": true },
+  "include": ["src"],
+  "exclude": []
+}

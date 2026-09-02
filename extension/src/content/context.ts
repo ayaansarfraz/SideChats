@@ -1,4 +1,4 @@
-import type { ContextPackage, Role } from "../shared/types";
+import type { ContextPackage, ImageAttachment, Rect, Role } from "../shared/types";
 import { getAdapterForHost, type SiteAdapter } from "./adapters";
 
 /**
@@ -129,28 +129,20 @@ function turnText(adapter: SiteAdapter, el: Element): string {
 }
 
 /**
- * Build the context package for a selection, using `adapter` to interpret the
- * page. Exported separately from `getSelectionContext` so tests can drive it
- * against a fixture document without stubbing `window.location`.
+ * The conversation around an assistant turn: the message that prompted it and,
+ * where there is one, the exchange before that.
+ *
+ * Shared by the two ways into a side chat — a text selection and a captured
+ * region — so the surrounding context a branch carries doesn't depend on which
+ * gesture started it.
  */
-export function extractContext(
-  selection: Selection,
+function surroundingsOf(
   adapter: SiteAdapter,
-  root: ParentNode,
-): ContextPackage | null {
-  if (!selection || selection.rangeCount === 0) return null;
-
-  const selectedText = selection.toString();
-  if (!selectedText.trim()) return null;
-
-  const turns = collectTurns(adapter, root);
-  const turn = resolveTurn(adapter, turns, selection);
-  // Side chats branch off what the AI said, so a selection in the user's own
-  // message (or in page furniture outside the conversation) is not askable.
-  if (!turn || adapter.roleOf(turn) !== "assistant") return null;
-
-  const assistantIndex = turns.indexOf(turn);
-  const parentAiResponse = turnText(adapter, turn);
+  turns: Element[],
+  assistantTurn: Element,
+): Pick<ContextPackage, "parentUserMessage" | "parentAiResponse" | "priorContext"> {
+  const assistantIndex = turns.indexOf(assistantTurn);
+  const parentAiResponse = turnText(adapter, assistantTurn);
 
   const userTurn = previousTurnOfRole(adapter, turns, assistantIndex, "user");
   const parentUserMessage = userTurn ? turnText(adapter, userTurn) : "";
@@ -178,11 +170,73 @@ export function extractContext(
   }
 
   return {
-    selectedText,
     parentUserMessage,
     parentAiResponse,
     ...(priorContext ? { priorContext } : {}),
   };
+}
+
+/**
+ * Build the context package for a selection, using `adapter` to interpret the
+ * page. Exported separately from `getSelectionContext` so tests can drive it
+ * against a fixture document without stubbing `window.location`.
+ */
+export function extractContext(
+  selection: Selection,
+  adapter: SiteAdapter,
+  root: ParentNode,
+): ContextPackage | null {
+  if (!selection || selection.rangeCount === 0) return null;
+
+  const selectedText = selection.toString();
+  if (!selectedText.trim()) return null;
+
+  const turns = collectTurns(adapter, root);
+  const turn = resolveTurn(adapter, turns, selection);
+  // Side chats branch off what the AI said, so a selection in the user's own
+  // message (or in page furniture outside the conversation) is not askable.
+  if (!turn || adapter.roleOf(turn) !== "assistant") return null;
+
+  return { selectedText, ...surroundingsOf(adapter, turns, turn) };
+}
+
+/**
+ * Build the context package for a captured region.
+ *
+ * The picture is the excerpt, so `selectedText` is empty and `screenshot`
+ * carries the branch point. Unlike a selection this never returns `null`: the
+ * user has already dragged a box and waited for a capture, and throwing that
+ * away because the box happened to land in the page margin would be a worse
+ * answer than a side chat with no surrounding turn.
+ *
+ * Where the region *does* land decides how much conversation rides along:
+ * inside an assistant turn it gets the same surroundings a selection would;
+ * inside the user's own message it gets that message and no response (there is
+ * nothing to branch off yet); outside the conversation entirely, both are empty
+ * and the image stands alone.
+ */
+export function extractRegionContext(
+  element: Element | null,
+  screenshot: ImageAttachment,
+  adapter: SiteAdapter,
+  root: ParentNode,
+): ContextPackage {
+  const base: ContextPackage = {
+    selectedText: "",
+    parentUserMessage: "",
+    parentAiResponse: "",
+    screenshot,
+  };
+
+  const turns = collectTurns(adapter, root);
+  const turn = turnContaining(adapter, turns, element);
+  if (!turn) return base;
+
+  if (adapter.roleOf(turn) === "user") {
+    return { ...base, parentUserMessage: turnText(adapter, turn) };
+  }
+
+  return { ...base, ...surroundingsOf(adapter, turns, turn) };
 }
 
 /**
@@ -193,4 +247,51 @@ export function getSelectionContext(selection: Selection): ContextPackage | null
   const adapter = getAdapterForHost(window.location.hostname);
   if (!adapter) return null;
   return extractContext(selection, adapter, document);
+}
+
+/**
+ * The element under the centre of a captured region.
+ *
+ * `elementFromPoint` takes viewport coordinates, which is exactly what the
+ * capture rect is in, and returns the *topmost* element — so this has to be
+ * called with the capture overlay already torn down and the panel hidden, or it
+ * reports our own UI instead of the page. The centre is clamped into the
+ * viewport because a drag that ran off the edge of the window is clamped too.
+ *
+ * jsdom has no layout and does not implement `elementFromPoint`, so this
+ * degrades to `null` there rather than throwing; the extraction it feeds is
+ * tested directly through `extractRegionContext`.
+ */
+export function elementUnderRegion(rect: Rect, doc: Document = document): Element | null {
+  const maxX = Math.max(0, doc.documentElement.clientWidth - 1);
+  const maxY = Math.max(0, doc.documentElement.clientHeight - 1);
+  const x = Math.min(Math.max(rect.x + rect.width / 2, 0), maxX);
+  const y = Math.min(Math.max(rect.y + rect.height / 2, 0), maxY);
+
+  try {
+    return doc.elementFromPoint?.(x, y) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Context for a region captured on the current page. Mirrors
+ * `getSelectionContext`: this half reads the live document and the window's
+ * host, `extractRegionContext` holds the logic worth testing.
+ */
+export function getRegionContext(
+  screenshot: ImageAttachment,
+  element: Element | null,
+): ContextPackage {
+  const adapter = getAdapterForHost(window.location.hostname);
+  if (!adapter) {
+    return {
+      selectedText: "",
+      parentUserMessage: "",
+      parentAiResponse: "",
+      screenshot,
+    };
+  }
+  return extractRegionContext(element, screenshot, adapter, document);
 }

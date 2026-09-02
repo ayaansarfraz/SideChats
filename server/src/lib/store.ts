@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { Message, SideChat } from "../types.js";
+import type { Message, SideChat, StoredImage } from "../types.js";
 
 const IDLE_TTL_MS = 30 * 60 * 1000;
 const SWEEP_INTERVAL_MS = 5 * 60 * 1000;
@@ -11,6 +11,7 @@ export function createSideChat(input: {
   parentAiResponse: string;
   selectedText: string;
   priorContext?: string;
+  screenshot?: StoredImage;
 }): SideChat {
   const now = Date.now();
   const sideChat: SideChat = {
@@ -21,6 +22,7 @@ export function createSideChat(input: {
     parentAiResponse: input.parentAiResponse,
     selectedText: input.selectedText,
     priorContext: input.priorContext,
+    screenshot: input.screenshot,
     messages: [],
   };
   sideChats.set(sideChat.id, sideChat);

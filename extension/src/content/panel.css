@@ -103,6 +103,24 @@
   margin-bottom: 6px;
 }
 
+/* A captured region takes the excerpt's slot, so the line clamp meant for text
+   has to come off or it would crop the thumbnail to three lines' worth. */
+.sidechats-header-preview--image {
+  display: block;
+  -webkit-line-clamp: none;
+  overflow: visible;
+}
+
+.sidechats-header-thumb {
+  display: block;
+  max-width: 100%;
+  max-height: 108px;
+  width: auto;
+  border-radius: 8px;
+  border: 1px solid var(--sc-line);
+  background: var(--sc-raise);
+}
+
 .sidechats-header-preview {
   margin: 0;
   font-family: var(--sc-serif);
@@ -173,6 +191,39 @@
   color: var(--sc-ink-soft);
 }
 
+/* ---------- images in the thread ---------- */
+
+.sidechats-bubble-images {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sidechats-bubble-images--multi {
+  flex-direction: row;
+  flex-wrap: wrap;
+}
+
+.sidechats-bubble-images--multi .sidechats-message-image {
+  max-width: calc(50% - 3px);
+  max-height: 130px;
+}
+
+.sidechats-message-image {
+  display: block;
+  max-width: 100%;
+  max-height: 260px;
+  width: auto;
+  border-radius: 9px;
+  /* The bubble is the accent colour, so a hairline keeps a light screenshot
+     from bleeding into it. */
+  border: 1px solid rgba(255, 255, 255, 0.35);
+}
+
+.sidechats-bubble-text {
+  margin-top: 7px;
+}
+
 /* The question is the aside, so it stays a compact bubble. */
 .sidechats-bubble--user {
   align-self: flex-end;
@@ -184,6 +235,11 @@
   font-size: 13.5px;
   white-space: pre-wrap;
   word-wrap: break-word;
+}
+
+/* No words to sit under the picture, so the bubble shrinks to the picture. */
+.sidechats-bubble--media-only {
+  padding: 5px;
 }
 
 /* The answer is what you came for: full width, no container, just a margin
@@ -325,14 +381,114 @@
 
 /* ---------- composer ---------- */
 
-.sidechats-input-row {
+/* The tray and the input row read as one control, so the border and the
+   background live on the wrapper and neither child draws its own rule. */
+.sidechats-composer {
   flex: 0 0 auto;
+  border-top: 1px solid var(--sc-line);
+  background: var(--sc-surface);
+}
+
+.sidechats-input-row {
   display: flex;
   align-items: flex-end;
   gap: 8px;
   padding: 12px 14px 14px;
-  border-top: 1px solid var(--sc-line);
-  background: var(--sc-surface);
+}
+
+/* ---------- staged images ---------- */
+
+.sidechats-tray {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px 14px 0;
+}
+
+/* A class selector beats the UA sheet's [hidden] rule, so the empty tray has to
+   be hidden explicitly or it would keep its padding with nothing in it. */
+.sidechats-tray[hidden] {
+  display: none;
+}
+
+.sidechats-chip {
+  position: relative;
+  width: 58px;
+  height: 58px;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid var(--sc-line);
+  background: var(--sc-raise);
+}
+
+.sidechats-chip-thumb {
+  display: block;
+  width: 100%;
+  height: 100%;
+  /* Cover, not contain: the chip is a handle for something the user just
+     attached, not a preview they are meant to read. */
+  object-fit: cover;
+}
+
+.sidechats-chip-remove {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  display: grid;
+  place-items: center;
+  appearance: none;
+  border: none;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border-radius: 50%;
+  /* Its own scrim, because it sits on an image of unknown colour. */
+  background: rgba(12, 12, 18, 0.62);
+  color: #fff;
+  cursor: pointer;
+  transition: background-color 120ms ease;
+}
+
+.sidechats-chip-remove:hover {
+  background: rgba(12, 12, 18, 0.85);
+}
+
+.sidechats-file-input {
+  display: none;
+}
+
+.sidechats-attach {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  appearance: none;
+  border: none;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background: transparent;
+  /* Quiet next to Send: attaching is optional, sending is the action. */
+  color: var(--sc-ink-soft);
+  cursor: pointer;
+  padding: 0;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.sidechats-attach:hover {
+  background: color-mix(in srgb, var(--sc-ink) 8%, transparent);
+  color: var(--sc-ink);
+}
+
+/* Drag feedback is drawn as an overlay rather than a border so the panel's own
+   layout doesn't shift by a pixel when a drag enters it. */
+.sidechats-panel.sidechats-dropping::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border: 2px dashed var(--sc-accent);
+  background: var(--sc-wash);
+  z-index: 1;
 }
 
 .sidechats-input {

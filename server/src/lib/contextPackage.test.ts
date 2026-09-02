@@ -63,4 +63,51 @@ describe("buildSystemPrompt", () => {
     // The original, legitimate PARENT AI RESPONSE section still comes first.
     expect(prompt.indexOf("PARENT AI RESPONSE:\nb")).toBeLessThan(prompt.indexOf(adversarial));
   });
+
+  it("swaps SELECTED TEXT for SELECTED REGION when a screenshot is the branch point", () => {
+    const prompt = buildSystemPrompt({
+      parentUserMessage: "a",
+      parentAiResponse: "b",
+      selectedText: "",
+      hasScreenshot: true,
+    });
+    expect(prompt).toContain("SELECTED REGION:");
+    expect(prompt).not.toContain("SELECTED TEXT:");
+    // The system prompt is a plain string and cannot carry the image itself,
+    // so it has to point at where the bytes actually are.
+    expect(prompt).toContain("attached to their first message");
+    expect(prompt).not.toContain("highlighted a piece of text");
+  });
+
+  it("keeps SELECTED TEXT when a screenshot rides along with a real selection", () => {
+    const prompt = buildSystemPrompt({
+      parentUserMessage: "a",
+      parentAiResponse: "b",
+      selectedText: "timeslice",
+      hasScreenshot: true,
+    });
+    expect(prompt).toContain("SELECTED TEXT:");
+    expect(prompt).toContain("timeslice");
+    expect(prompt).not.toContain("SELECTED REGION:");
+  });
+
+  it("keeps SELECTED TEXT for an empty selection with no screenshot", () => {
+    // Empty alone is not a region — the region branch needs the image.
+    const prompt = buildSystemPrompt({ parentUserMessage: "a", parentAiResponse: "b", selectedText: "" });
+    expect(prompt).toContain("SELECTED TEXT:");
+    expect(prompt).not.toContain("SELECTED REGION:");
+  });
+
+  it("still keeps the region section ahead of prior context", () => {
+    const prompt = buildSystemPrompt({
+      parentUserMessage: "a",
+      parentAiResponse: "b",
+      selectedText: "",
+      hasScreenshot: true,
+      priorContext: "User: earlier question",
+    });
+    expect(prompt.indexOf("SELECTED REGION:")).toBeLessThan(
+      prompt.indexOf("OPTIONAL RELEVANT PRIOR CONTEXT:"),
+    );
+  });
 });

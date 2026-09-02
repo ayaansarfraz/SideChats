@@ -4,6 +4,7 @@ import express, { type ErrorRequestHandler } from "express";
 import rateLimit from "express-rate-limit";
 import path from "path";
 import { fileURLToPath } from "url";
+import { JSON_BODY_LIMIT } from "./lib/images.js";
 import { sideChatsRouter } from "./routes/sideChats.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -31,7 +32,7 @@ app.use(
     },
   }),
 );
-app.use(express.json());
+app.use(express.json({ limit: JSON_BODY_LIMIT }));
 
 const handleJsonParseError: ErrorRequestHandler = (err, _req, res, next) => {
   if (err instanceof SyntaxError && "body" in err) {

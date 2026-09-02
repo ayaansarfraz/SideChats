@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ImageAttachment } from "../shared/types";
+import { MAX_IMAGES_PER_MESSAGE } from "../shared/image";
 import { createPanel } from "./panel";
+import { EXTENSION_RELOADED_MESSAGE } from "./runtime";
 
 /**
  * Regression cover for a real bug report: typing into the panel's input
@@ -19,6 +22,11 @@ beforeEach(() => {
     "fetch",
     vi.fn().mockResolvedValue({ text: () => Promise.resolve("") }),
   );
+  // jsdom has no codec, and none of these tests are about one. The stub reports
+  // fixed dimensions so `processImage` takes its pass-through path (already
+  // small enough, already a supported type) and the composer gets a real
+  // ImageAttachment back without OffscreenCanvas ever being needed.
+  vi.stubGlobal("createImageBitmap", async () => ({ width: 800, height: 600, close: () => {} }));
 });
 
 const ctx = { selectedText: "timeslice", parentUserMessage: "u", parentAiResponse: "a" };
@@ -102,5 +110,301 @@ describe("panel focus containment", () => {
     await Promise.resolve();
 
     expect(document.activeElement).toBe(outsideInput);
+  });
+});
+
+/* ---------------------------------------------------------------------------
+ * Composer: staging images and sending them.
+ *
+ * jsdom implements neither DataTransfer, ClipboardEvent nor DragEvent, so the
+ * paste and drop events below are hand-built with just the surface panel.ts
+ * actually reads. That is a real limitation of these tests — they prove the
+ * composer's logic, not that a browser hands it what it expects — which is why
+ * the plan puts a real-Chromium drag in `check:browser` on top.
+ * ------------------------------------------------------------------------ */
+
+function imageFile(type = "image/png", bytes = 32): File {
+  return new File([new Uint8Array(bytes)], "shot.png", { type });
+}
+
+function attachment(overrides: Partial<ImageAttachment> = {}): ImageAttachment {
+  return {
+    id: "img-1",
+    mediaType: "image/png",
+    data: "aGVsbG8=",
+    width: 20,
+    height: 10,
+    byteSize: 5,
+    ...overrides,
+  };
+}
+
+function pasteEvent(items: Array<{ kind: string; type: string; file?: File }>): Event {
+  const event = new Event("paste", { bubbles: true, cancelable: true, composed: true });
+  Object.defineProperty(event, "clipboardData", {
+    value: {
+      items: items.map((item) => ({
+        kind: item.kind,
+        type: item.type,
+        getAsFile: () => item.file ?? null,
+      })),
+    },
+  });
+  return event;
+}
+
+function dropEvent(files: File[]): Event {
+  const event = new Event("drop", { bubbles: true, cancelable: true, composed: true });
+  Object.defineProperty(event, "dataTransfer", { value: { types: ["Files"], files } });
+  return event;
+}
+
+function openComposer(onSubmit = vi.fn().mockResolvedValue({ reply: "an answer" })) {
+  const panel = createPanel({ onSubmit });
+  panel.open(ctx);
+  const root = document.getElementById("sidechats-root")!.shadowRoot!;
+  return {
+    panel,
+    onSubmit,
+    root,
+    input: root.querySelector(".sidechats-input") as HTMLTextAreaElement,
+    sendBtn: root.querySelector(".sidechats-send") as HTMLButtonElement,
+    panelEl: root.querySelector(".sidechats-panel") as HTMLDivElement,
+    tray: root.querySelector(".sidechats-tray") as HTMLDivElement,
+    chips: () => Array.from(root.querySelectorAll(".sidechats-chip")),
+    bodyText: () => (root.querySelector(".sidechats-body") as HTMLElement).textContent ?? "",
+  };
+}
+
+describe("composer image staging", () => {
+  it("stages a pasted image as a tray chip", async () => {
+    const { input, tray, chips } = openComposer();
+
+    expect(tray.hidden).toBe(true);
+    input.dispatchEvent(pasteEvent([{ kind: "file", type: "image/png", file: imageFile() }]));
+
+    await vi.waitFor(() => expect(chips()).toHaveLength(1));
+    expect(tray.hidden).toBe(false);
+    const thumb = chips()[0].querySelector("img") as HTMLImageElement;
+    expect(thumb.src.startsWith("data:image/png;base64,")).toBe(true);
+  });
+
+  it("leaves a plain-text paste alone", async () => {
+    const { input, chips } = openComposer();
+
+    const event = pasteEvent([{ kind: "string", type: "text/plain" }]);
+    input.dispatchEvent(event);
+
+    await Promise.resolve();
+    expect(event.defaultPrevented).toBe(false);
+    expect(chips()).toHaveLength(0);
+  });
+
+  it("removes a chip with its × and re-hides the empty tray", async () => {
+    const { input, tray, chips } = openComposer();
+
+    input.dispatchEvent(pasteEvent([{ kind: "file", type: "image/png", file: imageFile() }]));
+    await vi.waitFor(() => expect(chips()).toHaveLength(1));
+
+    (chips()[0].querySelector(".sidechats-chip-remove") as HTMLButtonElement).click();
+
+    expect(chips()).toHaveLength(0);
+    expect(tray.hidden).toBe(true);
+  });
+
+  it("stages an image dropped on the panel", async () => {
+    const { panelEl, chips } = openComposer();
+
+    panelEl.dispatchEvent(dropEvent([imageFile()]));
+
+    await vi.waitFor(() => expect(chips()).toHaveLength(1));
+  });
+
+  it("stages images chosen through the file picker", async () => {
+    const { root, chips } = openComposer();
+    const fileInput = root.querySelector(".sidechats-file-input") as HTMLInputElement;
+
+    Object.defineProperty(fileInput, "files", { value: [imageFile()], configurable: true });
+    fileInput.dispatchEvent(new Event("change"));
+
+    await vi.waitFor(() => expect(chips()).toHaveLength(1));
+  });
+
+  it("renders an image handed to addImage — the region-capture entry point", () => {
+    const { panel, chips, tray } = openComposer();
+
+    panel.addImage(attachment());
+
+    expect(chips()).toHaveLength(1);
+    expect(tray.hidden).toBe(false);
+  });
+
+  it("stops staging once the extension context is gone", async () => {
+    const onSubmit = vi.fn().mockRejectedValue(new Error("Extension context invalidated."));
+    const { panel, input, sendBtn, chips } = openComposer(onSubmit);
+
+    input.value = "anything";
+    sendBtn.click();
+    await vi.waitFor(() => expect(onSubmit).toHaveBeenCalled());
+
+    panel.addImage(attachment());
+
+    // Nothing staged now could ever be sent — the panel is already showing the
+    // reload wall, and a chip would only invite another doomed send.
+    expect(chips()).toHaveLength(0);
+  });
+
+  it("refuses more than the per-message limit and says so", () => {
+    const { panel, chips, bodyText } = openComposer();
+
+    for (let i = 0; i <= MAX_IMAGES_PER_MESSAGE; i++) {
+      panel.addImage(attachment({ id: `img-${i}` }));
+    }
+
+    expect(chips()).toHaveLength(MAX_IMAGES_PER_MESSAGE);
+    expect(bodyText()).toContain(`up to ${MAX_IMAGES_PER_MESSAGE} images`);
+  });
+});
+
+describe("composer submit with images", () => {
+  it("sends an image with no question at all", async () => {
+    const { panel, onSubmit, sendBtn } = openComposer();
+    const image = attachment();
+    panel.addImage(image);
+
+    sendBtn.click();
+
+    await vi.waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit.mock.calls[0][0]).toBe("");
+    expect(onSubmit.mock.calls[0][2]).toEqual([image]);
+  });
+
+  it("still refuses a submit with neither text nor images", async () => {
+    const { onSubmit, sendBtn } = openComposer();
+
+    sendBtn.click();
+    await Promise.resolve();
+
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("clears the tray as the message goes out", async () => {
+    const { panel, onSubmit, input, sendBtn, tray, chips } = openComposer();
+    panel.addImage(attachment());
+    input.value = "what is this?";
+
+    sendBtn.click();
+
+    await vi.waitFor(() => expect(onSubmit).toHaveBeenCalled());
+    expect(chips()).toHaveLength(0);
+    expect(tray.hidden).toBe(true);
+  });
+
+  it("shows the sent image in the user's own bubble, above the question", async () => {
+    const { panel, onSubmit, input, sendBtn, root } = openComposer();
+    panel.addImage(attachment());
+    input.value = "what is this?";
+
+    sendBtn.click();
+    await vi.waitFor(() => expect(onSubmit).toHaveBeenCalled());
+
+    const bubble = root.querySelector(".sidechats-bubble--user") as HTMLElement;
+    const img = bubble.querySelector("img") as HTMLImageElement;
+    expect(img.src).toBe("data:image/png;base64,aGVsbG8=");
+    expect(bubble.textContent).toContain("what is this?");
+    expect(bubble.firstElementChild?.className).toBe("sidechats-bubble-images");
+  });
+});
+
+describe("panel header for a captured region", () => {
+  it("shows the screenshot in the excerpt's place when nothing was selected", () => {
+    const panel = createPanel({ onSubmit: vi.fn() });
+    panel.open({
+      selectedText: "",
+      parentUserMessage: "u",
+      parentAiResponse: "a",
+      screenshot: attachment(),
+    });
+    const root = document.getElementById("sidechats-root")!.shadowRoot!;
+
+    const thumb = root.querySelector(".sidechats-header-thumb") as HTMLImageElement;
+    expect(thumb).not.toBeNull();
+    expect(thumb.src).toBe("data:image/png;base64,aGVsbG8=");
+  });
+
+  it("keeps the text excerpt when there is one, screenshot or not", () => {
+    const panel = createPanel({ onSubmit: vi.fn() });
+    panel.open({ ...ctx, screenshot: attachment() });
+    const root = document.getElementById("sidechats-root")!.shadowRoot!;
+
+    expect(root.querySelector(".sidechats-header-thumb")).toBeNull();
+    expect(root.querySelector(".sidechats-header-preview")!.textContent).toBe("timeslice");
+  });
+});
+
+/**
+ * `isOpen` and `showError` exist for the region-capture wiring in content.ts:
+ * it has to know whether a captured image seeds a new side chat or stages into
+ * the one already on screen, and a capture that fails needs somewhere to say so
+ * even when no side chat exists yet.
+ */
+describe("panel surface for region capture", () => {
+  const shadow = () => document.getElementById("sidechats-root")!.shadowRoot!;
+
+  it("reports open state across open and close", () => {
+    const panel = createPanel({ onSubmit: vi.fn() });
+    expect(panel.isOpen()).toBe(false);
+
+    panel.open(ctx);
+    expect(panel.isOpen()).toBe(true);
+
+    panel.close();
+    expect(panel.isOpen()).toBe(false);
+  });
+
+  it("is not open merely because an image was staged into it", () => {
+    const panel = createPanel({ onSubmit: vi.fn() });
+    panel.addImage({
+      id: "a",
+      mediaType: "image/png",
+      data: "aGk=",
+      width: 8,
+      height: 8,
+      byteSize: 2,
+    });
+    // addImage mounts the composer so it has somewhere to stage into, but
+    // mounting is not showing — content.ts branches on this exact distinction.
+    expect(panel.isOpen()).toBe(false);
+  });
+
+  it("opens the panel to show an error raised before any side chat exists", () => {
+    const panel = createPanel({ onSubmit: vi.fn() });
+    panel.showError("Couldn't capture that region.");
+
+    expect(panel.isOpen()).toBe(true);
+    expect(shadow().querySelector(".sidechats-bubble--error")?.textContent).toBe(
+      "Couldn't capture that region.",
+    );
+  });
+
+  it("appends to an open conversation instead of clearing it", () => {
+    const panel = createPanel({ onSubmit: vi.fn() });
+    panel.open(ctx);
+    const before = shadow().querySelector(".sidechats-empty");
+    expect(before).not.toBeNull();
+
+    panel.showError("Couldn't capture that region.");
+
+    expect(shadow().querySelector(".sidechats-empty")).not.toBeNull();
+    expect(shadow().querySelector(".sidechats-bubble--error")).not.toBeNull();
+  });
+
+  it("routes a reloaded-extension message to the terminal wall, not a plain bubble", () => {
+    const panel = createPanel({ onSubmit: vi.fn() });
+    panel.showError(EXTENSION_RELOADED_MESSAGE);
+
+    const input = shadow().querySelector(".sidechats-input") as HTMLTextAreaElement;
+    expect(shadow().querySelector(".sidechats-reload")).not.toBeNull();
+    expect(input.disabled).toBe(true);
   });
 });

@@ -31,7 +31,7 @@ afterEach(() => {
 
 describe("askSideChat", () => {
   it("returns the reply and id on success", async () => {
-    withLiveRuntime(async () => ({ ok: true, sideChatId: "sc_1", reply: "It means..." }));
+    withLiveRuntime(async () => ({ ok: true, kind: "reply" as const, sideChatId: "sc_1", reply: "It means..." }));
 
     await expect(askSideChat(CTX, "what does this mean?")).resolves.toEqual({
       sideChatId: "sc_1",
@@ -97,7 +97,7 @@ describe("askSideChat", () => {
 
 describe("continueSideChat", () => {
   it("returns the reply on success", async () => {
-    withLiveRuntime(async () => ({ ok: true, sideChatId: "sc_1", reply: "Because..." }));
+    withLiveRuntime(async () => ({ ok: true, kind: "reply" as const, sideChatId: "sc_1", reply: "Because..." }));
 
     await expect(continueSideChat("sc_1", "why?")).resolves.toEqual({ reply: "Because..." });
   });
