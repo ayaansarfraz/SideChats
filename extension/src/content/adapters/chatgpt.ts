@@ -3,6 +3,7 @@ import type { SiteAdapter } from "./types";
 
 const AUTHOR_ROLE_ATTR = "data-message-author-role";
 const TURN_ATTR = "data-turn";
+const UNIT_KEY_ATTR = "data-content-search-unit-key";
 
 /**
  * ChatGPT marks a turn in more than one way, and which ones are present has
@@ -13,6 +14,10 @@ const TURN_ATTR = "data-turn";
  * - `[data-testid^="conversation-turn-"]` — the same article, by test id.
  * - `[data-message-author-role]` — the message body inside it. Older markup had
  *   only this, and an assistant turn that used tools can hold several.
+ * - `[data-content-search-unit-key="<turn>:<n>:<role>"]` — one message, with its
+ *   role as the key's last segment. The October 2026 markup has only this: no
+ *   article, no role attribute. Its enclosing `[data-turn-key]` holds the
+ *   question *and* the answer, so that one is deliberately not a turn here.
  *
  * Listing all of them is a fallback chain: `collectTurns` keeps the outermost
  * match, so when the article is present it is the turn (and multi-part answers
@@ -24,10 +29,16 @@ const TURN_SELECTORS = [
   `article[${TURN_ATTR}]`,
   '[data-testid^="conversation-turn-"]',
   `[${AUTHOR_ROLE_ATTR}]`,
+  `[${UNIT_KEY_ATTR}]`,
 ];
 
 function asRole(value: string | null | undefined): Role | null {
   return value === "user" || value === "assistant" ? value : null;
+}
+
+/** `"fallback-turn-0:1:assistant"` → `"assistant"`. */
+function roleFromUnitKey(value: string | null): Role | null {
+  return value ? asRole(value.slice(value.lastIndexOf(":") + 1)) : null;
 }
 
 export const chatgptAdapter: SiteAdapter = {
@@ -43,6 +54,7 @@ export const chatgptAdapter: SiteAdapter = {
     return (
       asRole(el.getAttribute(AUTHOR_ROLE_ATTR)) ??
       asRole(el.getAttribute(TURN_ATTR)) ??
+      roleFromUnitKey(el.getAttribute(UNIT_KEY_ATTR)) ??
       asRole(el.querySelector(`[${AUTHOR_ROLE_ATTR}]`)?.getAttribute(AUTHOR_ROLE_ATTR))
     );
   },

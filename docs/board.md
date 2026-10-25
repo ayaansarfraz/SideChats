@@ -16,6 +16,14 @@ Do not create a second copy inside a worktree.
 
 ## Active
 
+### chatgpt-ask-button-live (this session)
+- **Agent:** Claude Code
+- **Checkout:** main (`/Users/ayaansarfraz/Documents/SideChats`)
+- **Status:** done (uncommitted on `main`)
+- **Working on:** Ask button still missing on live chatgpt.com after the 2026-10-12 fix. Fixed; user confirmed live.
+- **Owns:** `extension/src/content/adapters/chatgpt.ts`, `extension/src/content/askButton.ts`, `extension/src/content/__fixtures__/chatgpt.ts`, `extension/src/content/adapters/adapters.test.ts`, `extension/manifest.json`
+- **Updated:** 2026-10-25
+
 ### side-chat-not-found-fix (this session)
 - **Agent:** Claude Code
 - **Checkout:** main (`/Users/ayaansarfraz/Documents/SideChats`)
@@ -137,6 +145,7 @@ All 5 worktrees (the original `worktree-sidechats-extension` scaffold plus the 4
 
 ## Messages
 
+- **2026-10-25 (done) · chatgpt-ask-button-live → all** — Real cause of the missing ChatGPT Ask button: chatgpt.com's Oct 2026 markup has no `article[data-turn]` and no `data-message-author-role`. Messages are now `[data-content-search-unit-key="<turn>:<n>:<role>"]`; one `[data-turn-key]` wraps question + answer, so it is not treated as a turn. `adapters/chatgpt.ts` matches the unit key and parses the role from its last segment (old selectors kept as fallbacks). 3 new tests, 227/227, typecheck, `check:browser` 24/24. **User confirmed the button shows on live chatgpt.com.** Still unconfirmed: that user messages carry a `:user` unit key (else `parentUserMessage` comes back empty).
 - **2026-10-13 (done) · side-chat-not-found-fix → all** — "Side chat not found" on every send: `continueSideChat` threw instead of returning `{error}`, so panel.ts's `chatIsGone` branch never ran and the stale id stuck forever (server store is in-memory; any restart drops it). New `sendSideChatQuestion` in `apiClient.ts` catches the 404 (`SideChatGoneError`) and re-creates the chat seeded with the thread; `content.ts` onSubmit now just calls it. 224/224, `dist/` rebuilt.
 - **2026-10-12 · chatgpt-ask-button-fix → all** — User confirms the content script loads on chatgpt.com but still no Ask button. Second pass in `askButton.ts`: scroll no longer removes the button (any inner-container scroll used to kill it instantly; now it follows the selection and only goes when the selection leaves view), and every rejected selection / early removal logs a `[SideChats]` console line with the reason and the selection's ancestor `data-*` attributes. 221/221, `check:browser` 24/24, `dist/` rebuilt. Waiting on the user's console output if it still fails.
 - **2026-10-12 (done) · chatgpt-ask-button-fix → all** — User reported no Ask button on chatgpt.com. Couldn't inspect the live DOM, so I fixed both likely causes: (1) `adapters/chatgpt.ts` now matches `article[data-turn]` / `[data-testid^="conversation-turn-"]` as well as `[data-message-author-role]`, `roleOf` falls back to `data-turn` then to the inner role element, and `.sr-only` "ChatGPT said:" headings are stripped as noise; (2) `askButton.ts` now listens for `mouseup` in the capture phase on `window`, so a page that stops propagation can't hide the button. 4 new tests fail on the old code and pass now (220/220), typecheck clean, `check:browser` 24/24, `dist/` rebuilt. **Not yet verified on live chatgpt.com.** Uncommitted on `main` alongside persistent-panel's changes.
