@@ -1,28 +1,56 @@
+import type { Role } from "../../shared/types";
 import type { SiteAdapter } from "./types";
 
 const AUTHOR_ROLE_ATTR = "data-message-author-role";
+const TURN_ATTR = "data-turn";
 
 /**
- * ChatGPT tags every message with `data-message-author-role="user" | "assistant"`,
- * so one attribute does both jobs: finding turns and classifying them.
+ * ChatGPT marks a turn in more than one way, and which ones are present has
+ * shifted between releases:
  *
- * This is the behaviour the extension shipped with; it is unchanged, just moved
- * behind the adapter interface.
+ * - `article[data-turn="user" | "assistant"]` — the whole turn, including the
+ *   "ChatGPT said:" heading and the action bar.
+ * - `[data-testid^="conversation-turn-"]` — the same article, by test id.
+ * - `[data-message-author-role]` — the message body inside it. Older markup had
+ *   only this, and an assistant turn that used tools can hold several.
+ *
+ * Listing all of them is a fallback chain: `collectTurns` keeps the outermost
+ * match, so when the article is present it is the turn (and multi-part answers
+ * stay one turn), and when it is gone the role element still matches on its
+ * own. Relying on the role attribute alone is what broke the Ask button when
+ * the markup moved.
  */
+const TURN_SELECTORS = [
+  `article[${TURN_ATTR}]`,
+  '[data-testid^="conversation-turn-"]',
+  `[${AUTHOR_ROLE_ATTR}]`,
+];
+
+function asRole(value: string | null | undefined): Role | null {
+  return value === "user" || value === "assistant" ? value : null;
+}
+
 export const chatgptAdapter: SiteAdapter = {
   id: "chatgpt",
   label: "ChatGPT",
   hosts: ["chatgpt.com", "chat.openai.com"],
-  turnSelector: `[${AUTHOR_ROLE_ATTR}]`,
+  turnSelector: TURN_SELECTORS.join(","),
 
   roleOf(el) {
-    const role = el.getAttribute(AUTHOR_ROLE_ATTR);
-    return role === "user" || role === "assistant" ? role : null;
+    // A wrapper that carries no role of its own takes the role of the message
+    // inside it. Returning null for it instead would hide that message too:
+    // `collectTurns` drops any match nested in another match.
+    return (
+      asRole(el.getAttribute(AUTHOR_ROLE_ATTR)) ??
+      asRole(el.getAttribute(TURN_ATTR)) ??
+      asRole(el.querySelector(`[${AUTHOR_ROLE_ATTR}]`)?.getAttribute(AUTHOR_ROLE_ATTR))
+    );
   },
 
   // Code blocks render a "Copy code" control inside the message body, which
-  // otherwise lands in the middle of the extracted response text.
-  noiseSelectors: ["button"],
+  // otherwise lands in the middle of the extracted response text. `.sr-only`
+  // is the screen-reader "You said:" / "ChatGPT said:" heading on each turn.
+  noiseSelectors: ["button", ".sr-only"],
 
   accentColor: "#10a37f",
 };

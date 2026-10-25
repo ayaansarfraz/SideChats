@@ -65,3 +65,36 @@ export type Rect = {
   width: number;
   height: number;
 };
+
+/**
+ * A side chat as it is written to `chrome.storage.local`, so that dismissing the
+ * panel — or reloading the page under it — stops being the same thing as
+ * throwing the conversation away.
+ *
+ * Deliberately not a `SideChatState`: `status` and `error` describe an in-flight
+ * request that cannot survive a reload anyway, and `pendingImages` are staged
+ * but unsent, which makes them both the largest thing in state and the least
+ * worth keeping.
+ */
+export type PersistedChatMessage = ChatMessage & {
+  /**
+   * Set when the images on this message were dropped to fit the storage quota,
+   * so the restored bubble can say so instead of silently losing a picture the
+   * user remembers attaching.
+   */
+  imagesDropped?: boolean;
+};
+
+export type PersistedSideChat = {
+  sideChatId: string | null;
+  contextPackage: ContextPackage;
+  messages: PersistedChatMessage[];
+  /** Whether the panel was on screen when this was written. */
+  isOpen: boolean;
+  /**
+   * When this was last written, ms since epoch. Also how a restore can tell
+   * that the server's 30-minute idle sweep has almost certainly taken the
+   * `sideChatId` with it.
+   */
+  savedAt: number;
+};

@@ -1,9 +1,22 @@
-import type { ContextPackage, ImageAttachment, Rect } from "./types";
+import type { ChatMessage, ContextPackage, ImageAttachment, Rect } from "./types";
 
 /** Messages the content script sends to the background service worker. */
 export type CreateSideChatRequest = {
   type: "CREATE_SIDE_CHAT";
-  payload: ContextPackage & { question: string; images?: ImageAttachment[] };
+  payload: ContextPackage & {
+    question: string;
+    images?: ImageAttachment[];
+    /**
+     * Turns to seed the new side chat's history with.
+     *
+     * Only sent when a *restored* thread has to be re-created because the
+     * server swept its original after 30 minutes idle. Without it the panel
+     * shows a conversation the model has no memory of — which reads as the
+     * model losing the thread rather than the server having expired it.
+     * Text only, and always an even number of turns starting with `user`.
+     */
+    priorMessages?: ChatMessage[];
+  };
 };
 
 export type SendMessageRequest = {

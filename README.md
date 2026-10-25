@@ -40,6 +40,8 @@ npm run build             # or: npm run dev  (watch mode)
 
 Then load `extension/dist/` as an unpacked extension at `chrome://extensions` (Developer mode on) and open ChatGPT or Claude. Highlight text in an assistant message and click **Ask**, or click the SideChats toolbar icon and drag a box around anything on the page.
 
+A side chat stays put once you have one. The tab on the panel's left edge sends it away and brings it back, thread intact — click it, or drag it sideways and let go. The thread is stored per conversation, so reloading the page or coming back to that conversation later finds it where you left it.
+
 ## Tests
 
 ```bash
@@ -53,6 +55,6 @@ cd extension && npm test        # plus: npm run typecheck, npm run check:browser
 
 ## Status
 
-MVP. Side chats live in memory only — nothing persists across a server restart or page reload, images included. No accounts, no publishing to the Web Store.
+MVP. The server keeps side chats in memory only and sweeps them after 30 minutes idle, so nothing survives a server restart there. The extension keeps its own copy of the thread in `chrome.storage.local` (the five most recent conversations), which is what survives a page reload — if the server has since forgotten the chat, the next question re-creates it and hands back the history. No accounts, no publishing to the Web Store.
 
 See `PROJECT.md` for product context and `BUILD_PLAN.md` for the plan.

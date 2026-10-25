@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { askSideChat, continueSideChat } from "./apiClient";
+import { askSideChat, continueSideChat, sendSideChatQuestion, toPriorMessages } from "./apiClient";
 import { EXTENSION_RELOADED_MESSAGE } from "./runtime";
 import type { ContextPackage } from "../shared/types";
 
@@ -118,5 +118,146 @@ describe("continueSideChat", () => {
     }));
 
     await expect(continueSideChat("sc_gone", "hey")).rejects.toThrow("Side chat not found");
+  });
+});
+
+/**
+ * The panel keeps a thread across reloads, so it can outlive the server's
+ * 30-minute idle sweep and have to re-create the side chat. What it sends as
+ * history is not the same as what it shows on screen.
+ */
+describe("toPriorMessages", () => {
+  it("passes a well-formed thread through", () => {
+    expect(
+      toPriorMessages([
+        { role: "user", content: "why?" },
+        { role: "assistant", content: "because." },
+      ]),
+    ).toEqual([
+      { role: "user", content: "why?" },
+      { role: "assistant", content: "because." },
+    ]);
+  });
+
+  it("sends no history for a side chat that has none", () => {
+    expect(toPriorMessages([])).toEqual([]);
+  });
+
+  it("drops a trailing question whose answer never arrived", () => {
+    expect(
+      toPriorMessages([
+        { role: "user", content: "why?" },
+        { role: "assistant", content: "because." },
+        { role: "user", content: "and then?" },
+      ]),
+    ).toEqual([
+      { role: "user", content: "why?" },
+      { role: "assistant", content: "because." },
+    ]);
+  });
+
+  it("drops the question that errored, not the one that got answered", () => {
+    // What the panel holds after a failed send followed by a successful one.
+    expect(
+      toPriorMessages([
+        { role: "user", content: "failed question" },
+        { role: "user", content: "retried question" },
+        { role: "assistant", content: "an answer" },
+      ]),
+    ).toEqual([
+      { role: "user", content: "retried question" },
+      { role: "assistant", content: "an answer" },
+    ]);
+  });
+
+  it("leaves images behind", () => {
+    const history = toPriorMessages([
+      {
+        role: "user",
+        content: "what is this?",
+        images: [
+          { id: "i", mediaType: "image/png", data: "aGk=", width: 8, height: 8, byteSize: 2 },
+        ],
+      },
+      { role: "assistant", content: "a chart." },
+    ]);
+
+    expect(history[0]).toEqual({ role: "user", content: "what is this?" });
+  });
+});
+
+describe("askSideChat with restored history", () => {
+  it("sends the seeded turns alongside the new question", async () => {
+    const sent: unknown[] = [];
+    withLiveRuntime(async (req) => {
+      sent.push(req);
+      return { ok: true, kind: "reply" as const, sideChatId: "sc_2", reply: "still here" };
+    });
+
+    await askSideChat(CTX, "and then?", [], [
+      { role: "user", content: "why?" },
+      { role: "assistant", content: "because." },
+    ]);
+
+    expect((sent[0] as { payload: { priorMessages: unknown } }).payload.priorMessages).toEqual([
+      { role: "user", content: "why?" },
+      { role: "assistant", content: "because." },
+    ]);
+  });
+
+  it("leaves the field off entirely for a genuinely new side chat", async () => {
+    const sent: unknown[] = [];
+    withLiveRuntime(async (req) => {
+      sent.push(req);
+      return { ok: true, kind: "reply" as const, sideChatId: "sc_1", reply: "It means..." };
+    });
+
+    await askSideChat(CTX, "what does this mean?");
+
+    expect((sent[0] as { payload: Record<string, unknown> }).payload).not.toHaveProperty(
+      "priorMessages",
+    );
+  });
+});
+
+describe("sendSideChatQuestion", () => {
+  const THREAD = [
+    { role: "user" as const, content: "first?" },
+    { role: "assistant" as const, content: "first answer" },
+  ];
+
+  it("continues a chat the server still has", async () => {
+    const sendMessage = vi.fn(async (_req: unknown) => ({ ok: true, kind: "reply" as const, sideChatId: "sc_1", reply: "next" }));
+    withLiveRuntime(sendMessage);
+
+    await expect(sendSideChatQuestion(CTX, "sc_1", "again?", [], THREAD)).resolves.toEqual({ reply: "next" });
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage.mock.calls[0][0]).toMatchObject({ type: "SEND_MESSAGE" });
+  });
+
+  it("re-creates a chat the server has forgotten, seeded with the thread", async () => {
+    const sendMessage = vi.fn(async (req: unknown) =>
+      (req as { type: string }).type === "SEND_MESSAGE"
+        ? { ok: false, error: "Side chat not found", errorType: "http" }
+        : { ok: true, kind: "reply" as const, sideChatId: "sc_2", reply: "fresh" },
+    );
+    withLiveRuntime(sendMessage);
+
+    await expect(sendSideChatQuestion(CTX, "sc_stale", "again?", [], THREAD)).resolves.toEqual({
+      reply: "fresh",
+      sideChatId: "sc_2",
+    });
+    expect(sendMessage.mock.calls[1][0]).toMatchObject({
+      type: "CREATE_SIDE_CHAT",
+      payload: { question: "again?", priorMessages: THREAD },
+    });
+  });
+
+  it("does not re-create on any other failure", async () => {
+    const sendMessage = vi.fn(async () => ({ ok: false, error: "Request failed with status 502", errorType: "http" }));
+    withLiveRuntime(sendMessage);
+
+    await expect(sendSideChatQuestion(CTX, "sc_1", "again?", [], THREAD)).rejects.toThrow("502");
+    expect(sendMessage).toHaveBeenCalledTimes(1);
   });
 });

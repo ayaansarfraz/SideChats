@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ImageAttachment } from "../shared/types";
 import { MAX_IMAGES_PER_MESSAGE } from "../shared/image";
-import { createPanel } from "./panel";
+import { createPanel, dragShift, shouldSnapOpen } from "./panel";
 import { EXTENSION_RELOADED_MESSAGE } from "./runtime";
 
 /**
@@ -406,5 +406,292 @@ describe("panel surface for region capture", () => {
     const input = shadow().querySelector(".sidechats-input") as HTMLTextAreaElement;
     expect(shadow().querySelector(".sidechats-reload")).not.toBeNull();
     expect(input.disabled).toBe(true);
+  });
+});
+
+/**
+ * Dismissing a side chat used to be indistinguishable from deleting it: the
+ * only way back into the panel was `open()`, which resets state. These cover
+ * the way back — the handle, the drag on it, and rehydrating from storage.
+ */
+describe("dismiss and come back", () => {
+  const shadow = () => document.getElementById("sidechats-root")!.shadowRoot!;
+  const handle = () => shadow().querySelector(".sidechats-handle") as HTMLButtonElement;
+  const dock = () => shadow().querySelector(".sidechats-dock") as HTMLDivElement;
+
+  async function askOnce() {
+    const harness = openComposer();
+    harness.input.value = "what does this mean?";
+    harness.sendBtn.click();
+    await vi.waitFor(() => expect(harness.bodyText()).toContain("an answer"));
+    return harness;
+  }
+
+  it("keeps the thread across close and reopen", async () => {
+    const { panel, bodyText } = await askOnce();
+
+    panel.close();
+    expect(panel.isOpen()).toBe(false);
+
+    panel.reopen();
+
+    expect(panel.isOpen()).toBe(true);
+    expect(bodyText()).toContain("what does this mean?");
+    expect(bodyText()).toContain("an answer");
+  });
+
+  it("still resets the thread when open() starts a new branch", async () => {
+    const { panel, bodyText } = await askOnce();
+
+    panel.open({ selectedText: "cycles", parentUserMessage: "u", parentAiResponse: "a" });
+
+    expect(bodyText()).not.toContain("an answer");
+    expect(shadow().querySelector(".sidechats-empty")).not.toBeNull();
+  });
+
+  it("shows the handle only once a side chat exists", () => {
+    const panel = createPanel({ onSubmit: vi.fn() });
+    panel.showError("Couldn't capture that region.");
+    // Mounted by the error, but no side chat to go back to yet.
+    expect(handle().hidden).toBe(true);
+
+    panel.open(ctx);
+    expect(handle().hidden).toBe(false);
+
+    panel.close();
+    expect(handle().hidden).toBe(false);
+  });
+
+  it("toggles the panel from the handle", () => {
+    const panel = createPanel({ onSubmit: vi.fn() });
+    panel.open(ctx);
+
+    handle().dispatchEvent(new MouseEvent("mousedown", { button: 0, clientX: 100 }));
+    window.dispatchEvent(new MouseEvent("mouseup", { clientX: 100 }));
+    expect(panel.isOpen()).toBe(false);
+
+    handle().dispatchEvent(new MouseEvent("mousedown", { button: 0, clientX: 100 }));
+    window.dispatchEvent(new MouseEvent("mouseup", { clientX: 100 }));
+    expect(panel.isOpen()).toBe(true);
+  });
+
+  it("toggles from a keyboard activation of the handle", () => {
+    const panel = createPanel({ onSubmit: vi.fn() });
+    panel.open(ctx);
+
+    // A click with no mouse behind it — what Enter/Space on a button produces.
+    handle().dispatchEvent(new MouseEvent("click", { detail: 0 }));
+
+    expect(panel.isOpen()).toBe(false);
+  });
+
+  it("follows the pointer during a drag and snaps shut past halfway", () => {
+    const panel = createPanel({ onSubmit: vi.fn() });
+    panel.open(ctx);
+
+    handle().dispatchEvent(new MouseEvent("mousedown", { button: 0, clientX: 0 }));
+    window.dispatchEvent(new MouseEvent("mousemove", { clientX: 260 }));
+
+    expect(dock().style.transform).toBe("translateX(260px)");
+    expect(dock().classList.contains("sidechats-dragging")).toBe(true);
+
+    window.dispatchEvent(new MouseEvent("mouseup", { clientX: 260 }));
+
+    expect(panel.isOpen()).toBe(false);
+    // The class owns the position again once the pointer is up.
+    expect(dock().style.transform).toBe("");
+    expect(dock().classList.contains("sidechats-dragging")).toBe(false);
+  });
+
+  it("springs back open when a drag is released short of halfway", () => {
+    const panel = createPanel({ onSubmit: vi.fn() });
+    panel.open(ctx);
+
+    handle().dispatchEvent(new MouseEvent("mousedown", { button: 0, clientX: 0 }));
+    window.dispatchEvent(new MouseEvent("mousemove", { clientX: 120 }));
+    window.dispatchEvent(new MouseEvent("mouseup", { clientX: 120 }));
+
+    expect(panel.isOpen()).toBe(true);
+  });
+
+  it("pulls a closed panel back open by dragging left", () => {
+    const panel = createPanel({ onSubmit: vi.fn() });
+    panel.open(ctx);
+    panel.close();
+
+    handle().dispatchEvent(new MouseEvent("mousedown", { button: 0, clientX: 400 }));
+    window.dispatchEvent(new MouseEvent("mousemove", { clientX: 100 }));
+    window.dispatchEvent(new MouseEvent("mouseup", { clientX: 100 }));
+
+    expect(panel.isOpen()).toBe(true);
+  });
+
+  it("restores the page's text selection behaviour after a drag", () => {
+    const panel = createPanel({ onSubmit: vi.fn() });
+    panel.open(ctx);
+
+    handle().dispatchEvent(new MouseEvent("mousedown", { button: 0, clientX: 0 }));
+    expect(document.body.style.userSelect).toBe("none");
+
+    window.dispatchEvent(new MouseEvent("mouseup", { clientX: 0 }));
+    expect(document.body.style.userSelect).toBe("");
+  });
+
+  it("keeps a dismissed panel out of the tab order without hiding the handle", () => {
+    const panel = createPanel({ onSubmit: vi.fn() });
+    panel.open(ctx);
+    const panelEl = shadow().querySelector(".sidechats-panel") as HTMLDivElement;
+
+    panel.close();
+
+    expect(panelEl.hasAttribute("inert")).toBe(true);
+    expect(handle().hidden).toBe(false);
+
+    panel.reopen();
+    expect(panelEl.hasAttribute("inert")).toBe(false);
+  });
+});
+
+describe("persistence hand-off", () => {
+  const shadow = () => document.getElementById("sidechats-root")!.shadowRoot!;
+
+  it("hands out a record after a turn, and again when dismissed", async () => {
+    const onPersist = vi.fn();
+    const panel = createPanel({
+      onSubmit: vi.fn().mockResolvedValue({ reply: "an answer", sideChatId: "chat-1" }),
+      onPersist,
+    });
+    panel.open(ctx);
+    const root = shadow();
+    (root.querySelector(".sidechats-input") as HTMLTextAreaElement).value = "why?";
+    (root.querySelector(".sidechats-send") as HTMLButtonElement).click();
+
+    await vi.waitFor(() => expect(onPersist).toHaveBeenCalled());
+
+    const record = onPersist.mock.calls.at(-1)![0];
+    expect(record.sideChatId).toBe("chat-1");
+    expect(record.isOpen).toBe(true);
+    expect(record.messages.map((m: { content: string }) => m.content)).toEqual(["why?", "an answer"]);
+
+    panel.close();
+    expect(onPersist.mock.calls.at(-1)![0].isOpen).toBe(false);
+  });
+
+  it("does not write a side chat nobody has asked anything in", () => {
+    const onPersist = vi.fn();
+    const panel = createPanel({ onSubmit: vi.fn(), onPersist });
+
+    panel.open(ctx);
+    panel.close();
+
+    expect(onPersist).not.toHaveBeenCalled();
+  });
+
+  it("restores a stored thread, closed, with the handle waiting", () => {
+    const panel = createPanel({ onSubmit: vi.fn() });
+
+    panel.restore({
+      sideChatId: "chat-1",
+      contextPackage: ctx,
+      messages: [
+        { role: "user", content: "why?" },
+        { role: "assistant", content: "because." },
+      ],
+      isOpen: false,
+      savedAt: Date.now(),
+    });
+
+    const root = shadow();
+    expect(panel.isOpen()).toBe(false);
+    expect((root.querySelector(".sidechats-handle") as HTMLButtonElement).hidden).toBe(false);
+    expect(root.querySelector(".sidechats-header-preview")!.textContent).toBe("timeslice");
+
+    panel.reopen();
+    expect(root.querySelector(".sidechats-body")!.textContent).toContain("because.");
+  });
+
+  it("continues a restored chat against its stored id rather than starting over", async () => {
+    const onSubmit = vi.fn().mockResolvedValue({ reply: "still here" });
+    const panel = createPanel({ onSubmit });
+
+    panel.restore({
+      sideChatId: "chat-1",
+      contextPackage: ctx,
+      messages: [{ role: "user", content: "why?" }],
+      isOpen: true,
+      savedAt: Date.now(),
+    });
+
+    const root = shadow();
+    (root.querySelector(".sidechats-input") as HTMLTextAreaElement).value = "and then?";
+    (root.querySelector(".sidechats-send") as HTMLButtonElement).click();
+
+    await vi.waitFor(() => expect(onSubmit).toHaveBeenCalled());
+    expect(onSubmit.mock.calls[0][1].sideChatId).toBe("chat-1");
+  });
+
+  it("says so when a restored message lost its image to the storage quota", () => {
+    const panel = createPanel({ onSubmit: vi.fn() });
+
+    panel.restore({
+      sideChatId: null,
+      contextPackage: ctx,
+      messages: [{ role: "user", content: "what is this?", imagesDropped: true }],
+      isOpen: true,
+      savedAt: Date.now(),
+    });
+
+    expect(shadow().querySelector(".sidechats-dropped-note")).not.toBeNull();
+  });
+
+  it("clears the chat and takes the handle away on reset", async () => {
+    const panel = createPanel({ onSubmit: vi.fn().mockResolvedValue({ reply: "an answer" }) });
+    panel.open(ctx);
+    const root = shadow();
+    (root.querySelector(".sidechats-input") as HTMLTextAreaElement).value = "why?";
+    (root.querySelector(".sidechats-send") as HTMLButtonElement).click();
+    await vi.waitFor(() =>
+      expect(root.querySelector(".sidechats-body")!.textContent).toContain("an answer"),
+    );
+
+    panel.reset();
+
+    expect(panel.isOpen()).toBe(false);
+    expect((root.querySelector(".sidechats-handle") as HTMLButtonElement).hidden).toBe(true);
+    expect(root.querySelector(".sidechats-body")!.textContent).not.toContain("an answer");
+  });
+});
+
+describe("drag maths", () => {
+  it("clamps the dock between fully open and fully closed", () => {
+    expect(dragShift(0, 120, 400)).toBe(120);
+    expect(dragShift(0, -80, 400)).toBe(0);
+    expect(dragShift(400, 80, 400)).toBe(400);
+    expect(dragShift(400, -300, 400)).toBe(100);
+  });
+
+  it("snaps to whichever side the drag ended nearer", () => {
+    expect(shouldSnapOpen(0, 400)).toBe(true);
+    expect(shouldSnapOpen(199, 400)).toBe(true);
+    // Exactly halfway falls shut: a drag that got nowhere shouldn't count as
+    // pulling the panel open.
+    expect(shouldSnapOpen(200, 400)).toBe(false);
+    expect(shouldSnapOpen(400, 400)).toBe(false);
+  });
+});
+
+describe("persisting a question that hasn't been answered yet", () => {
+  it("writes the question before the reply comes back", async () => {
+    const onPersist = vi.fn();
+    // A send that never settles, standing in for a reload landing mid-request.
+    const panel = createPanel({ onSubmit: () => new Promise(() => {}), onPersist });
+    panel.open(ctx);
+
+    const root = document.getElementById("sidechats-root")!.shadowRoot!;
+    (root.querySelector(".sidechats-input") as HTMLTextAreaElement).value = "why?";
+    (root.querySelector(".sidechats-send") as HTMLButtonElement).click();
+
+    expect(onPersist).toHaveBeenCalledTimes(1);
+    expect(onPersist.mock.calls[0][0].messages).toEqual([{ role: "user", content: "why?" }]);
   });
 });

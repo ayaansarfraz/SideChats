@@ -1,4 +1,11 @@
-import type { ChatMessage, ContextPackage, ImageAttachment, SideChatState } from "../shared/types";
+import type {
+  ChatMessage,
+  ContextPackage,
+  ImageAttachment,
+  PersistedChatMessage,
+  PersistedSideChat,
+  SideChatState,
+} from "../shared/types";
 import {
   ImageRejectedError,
   MAX_IMAGES_PER_MESSAGE,
@@ -17,6 +24,13 @@ export type PanelDeps = {
     state: SideChatState,
     images: ImageAttachment[]
   ) => Promise<{ reply: string; sideChatId?: string } | { error: string }>;
+  /**
+   * Called whenever the thread changes in a way worth surviving a reload. The
+   * panel does not know which conversation it belongs to or where records are
+   * kept — that's the caller's business (see `content.ts`) — it only knows when
+   * there is something new to keep.
+   */
+  onPersist?: (record: PersistedSideChat) => void;
 };
 
 const DEFAULT_ACCENT = "#5b5bd6";
@@ -34,6 +48,12 @@ const ICON_ATTACH =
   '<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">' +
   '<path d="M12.4 7.3l-4.6 4.6a2.6 2.6 0 0 1-3.7-3.7l5.2-5.2a1.8 1.8 0 0 1 2.5 2.5l-5.1 5.1a0.9 0.9 0 0 1-1.3-1.3l4.4-4.4" ' +
   'fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+// Points left, toward the pull that opens the panel; CSS rotates it 180° once
+// the panel is open, so the chevron always shows where a click will send things.
+const ICON_HANDLE =
+  '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" focusable="false">' +
+  '<path d="M10 3L5 8l5 5" fill="none" stroke="currentColor" stroke-width="1.7" ' +
+  'stroke-linecap="round" stroke-linejoin="round"/></svg>';
 // Smaller than ICON_CLOSE and drawn to sit on a dark scrim over a thumbnail.
 const ICON_CHIP_REMOVE =
   '<svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true" focusable="false">' +
@@ -51,6 +71,22 @@ export type PanelController = {
    */
   hideForCapture: () => void;
   showAfterCapture: () => void;
+  /**
+   * Put an existing side chat back on screen, thread and all. The counterpart
+   * to `close()`, and the thing `open()` deliberately is not: `open()` means a
+   * new branch point and resets state, which is exactly what dismissing and
+   * un-dismissing must not do.
+   */
+  reopen: () => void;
+  /** `close()` or `reopen()`, whichever the panel isn't. What the handle does. */
+  toggle: () => void;
+  /** Put a stored side chat back after a reload or a navigation. */
+  restore: (record: PersistedSideChat) => void;
+  /**
+   * Forget the current side chat entirely and take the handle back off the
+   * page — for navigating to a conversation that has no side chat of its own.
+   */
+  reset: () => void;
   /** Whether the panel is currently on screen. */
   isOpen: () => boolean;
   /**
@@ -63,6 +99,31 @@ export type PanelController = {
 
 const HOST_ID = "sidechats-root";
 const PREVIEW_MAX_CHARS = 140;
+
+/** Mirrors `--sc-width` in panel.css; only used when the dock can't be measured. */
+const DEFAULT_WIDTH_PX = 408;
+
+/** Under this much travel, a grab was a click on the handle, not a drag. */
+const DRAG_CLICK_SLOP_PX = 4;
+
+/**
+ * How far the dock is pushed off-canvas mid-drag: 0 is fully open, `width` is
+ * fully closed. Pulled out as a pure function because the clamping is the part
+ * that gets subtly wrong at the edges, and it is much easier to pin down in a
+ * unit test than through a synthetic mouse gesture.
+ */
+export function dragShift(startShift: number, deltaX: number, width: number): number {
+  return Math.max(0, Math.min(width, startShift + deltaX));
+}
+
+/**
+ * Where a released drag lands. Past the halfway mark it goes the rest of the
+ * way open, otherwise it falls shut — the panel is never left half-slid, which
+ * would leave a thread partly on screen and partly not.
+ */
+export function shouldSnapOpen(shift: number, width: number): boolean {
+  return shift < width / 2;
+}
 
 let cachedCssPromise: Promise<string> | null = null;
 
@@ -142,6 +203,8 @@ function isFileDrag(dataTransfer: DataTransfer | null): boolean {
 export function createPanel(deps: PanelDeps): PanelController {
   let shadowRoot: ShadowRoot | null = null;
   let host: HTMLDivElement;
+  let dockEl: HTMLDivElement;
+  let handleEl: HTMLButtonElement;
   let panelEl: HTMLDivElement;
   let headerPreviewEl: HTMLElement;
   let bodyEl: HTMLDivElement;
@@ -157,6 +220,16 @@ export function createPanel(deps: PanelDeps): PanelController {
   let dragDepth = 0;
   // Once the extension context is gone the panel is read-only until reload.
   let contextLost = false;
+  // Handle-drag bookkeeping. `dragTravel` is the largest distance the pointer
+  // reached from where it went down, not the distance it ended at — a drag out
+  // and back is still a drag, not a click.
+  let dragging = false;
+  let dragStartX = 0;
+  let dragStartShift = 0;
+  let dragCurrentShift = 0;
+  let dragWidth = DEFAULT_WIDTH_PX;
+  let dragTravel = 0;
+  let userSelectBeforeDrag = "";
   let reclaimingFocus = false;
   // The most recent mousedown anywhere in the document, observed (not
   // intercepted) so the reclaim logic below can tell a deliberate click
@@ -205,9 +278,31 @@ export function createPanel(deps: PanelDeps): PanelController {
       styleEl.textContent = css;
     });
 
+    // Everything visible hangs off the dock, so one transform moves the panel
+    // and its handle together and the handle keeps its place on the panel's
+    // edge at every point in a drag.
+    dockEl = document.createElement("div");
+    dockEl.className = "sidechats-dock";
+    dockEl.style.setProperty("--sc-accent", deps.accentColor ?? DEFAULT_ACCENT);
+
+    handleEl = document.createElement("button");
+    handleEl.type = "button";
+    handleEl.className = "sidechats-handle";
+    handleEl.innerHTML = ICON_HANDLE;
+    // Stays out of the page until there is a side chat behind it to go back to.
+    handleEl.hidden = true;
+    handleEl.addEventListener("mousedown", onDragStart);
+    handleEl.addEventListener("click", (event) => {
+      // A mouse click is already accounted for by the drag lifecycle, which
+      // treats a grab that never moved as a toggle. Keyboard activation of a
+      // button reports `detail === 0` and has no drag behind it, so that is the
+      // one case this listener is for.
+      if (event.detail !== 0) return;
+      toggle();
+    });
+
     panelEl = document.createElement("div");
     panelEl.className = "sidechats-panel";
-    panelEl.style.setProperty("--sc-accent", deps.accentColor ?? DEFAULT_ACCENT);
 
     const header = document.createElement("div");
     header.className = "sidechats-header";
@@ -350,7 +445,98 @@ export function createPanel(deps: PanelDeps): PanelController {
     });
 
     panelEl.append(header, bodyEl, composer);
-    shadowRoot.appendChild(panelEl);
+    dockEl.append(handleEl, panelEl);
+    shadowRoot.appendChild(dockEl);
+
+    // Mounted closed, so the composer starts un-tabbable.
+    setOpen(false);
+  }
+
+  /**
+   * The one place the open/closed class is written.
+   *
+   * It goes on both the dock and the panel: the dock is what the CSS transform
+   * and the handle's chevron key off, while `.sidechats-panel.sidechats-open`
+   * is the selector `isOpen()` and the real-browser checks in `scripts/` have
+   * always read.
+   */
+  function setOpen(open: boolean): void {
+    dockEl.classList.toggle("sidechats-open", open);
+    panelEl.classList.toggle("sidechats-open", open);
+    // Replaces the `visibility: hidden` a closed panel used to carry — which
+    // would now take the handle down with it, since the handle is inside the
+    // same moving dock. `inert` does the half that mattered: a dismissed panel
+    // is neither tabbable nor hit-testable.
+    panelEl.toggleAttribute("inert", !open);
+    handleEl.setAttribute("aria-expanded", String(open));
+    handleEl.setAttribute("aria-label", open ? "Hide side chat" : "Show side chat");
+  }
+
+  /**
+   * The dock's on-screen width, which is what a drag is measured against.
+   * `max-width: 92vw` means this is not always `--sc-width`, so it is measured
+   * rather than assumed — falling back to the CSS default when there is no
+   * layout to measure (jsdom, or a drag somehow starting pre-layout), because a
+   * width of zero would make every drag snap shut on the first pixel.
+   */
+  function dockWidth(): number {
+    const measured = dockEl.getBoundingClientRect().width;
+    return measured > 0 ? measured : DEFAULT_WIDTH_PX;
+  }
+
+  function onDragStart(event: MouseEvent): void {
+    if (event.button !== 0) return;
+    // Suppresses the browser's own drag-and-drop of the button and the text
+    // selection that would otherwise start under the pointer.
+    event.preventDefault();
+
+    dragging = true;
+    dragWidth = dockWidth();
+    dragStartX = event.clientX;
+    dragStartShift = isOpen() ? 0 : dragWidth;
+    dragCurrentShift = dragStartShift;
+    dragTravel = 0;
+    dockEl.classList.add("sidechats-dragging");
+
+    // The pointer is about to travel across the host page. Without this it
+    // selects whatever it crosses, and the mouseup at the end hands askButton a
+    // selection the user never made.
+    userSelectBeforeDrag = document.body.style.userSelect;
+    document.body.style.userSelect = "none";
+
+    // On the window, in the capture phase, for the same reason regionCapture.ts
+    // does it: the pointer leaves the handle immediately and the mouseup can
+    // land anywhere, including outside the viewport.
+    window.addEventListener("mousemove", onDragMove, true);
+    window.addEventListener("mouseup", onDragEnd, true);
+  }
+
+  function onDragMove(event: MouseEvent): void {
+    if (!dragging) return;
+    const delta = event.clientX - dragStartX;
+    dragTravel = Math.max(dragTravel, Math.abs(delta));
+    dragCurrentShift = dragShift(dragStartShift, delta, dragWidth);
+    dockEl.style.transform = `translateX(${dragCurrentShift}px)`;
+  }
+
+  function onDragEnd(): void {
+    if (!dragging) return;
+    dragging = false;
+    window.removeEventListener("mousemove", onDragMove, true);
+    window.removeEventListener("mouseup", onDragEnd, true);
+
+    dockEl.classList.remove("sidechats-dragging");
+    // Hand the position back to the class, which is the only thing that should
+    // be deciding where the dock sits once the pointer is up.
+    dockEl.style.transform = "";
+    document.body.style.userSelect = userSelectBeforeDrag;
+
+    if (dragTravel < DRAG_CLICK_SLOP_PX) {
+      toggle();
+      return;
+    }
+    if (shouldSnapOpen(dragCurrentShift, dragWidth)) reopen();
+    else close();
   }
 
   function imageFilesFromClipboard(clipboardData: DataTransfer | null): File[] {
@@ -473,7 +659,7 @@ export function createPanel(deps: PanelDeps): PanelController {
     return gallery;
   }
 
-  function renderMessage(message: ChatMessage): void {
+  function renderMessage(message: PersistedChatMessage): void {
     const bubble = document.createElement("div");
     bubble.className = `sidechats-bubble sidechats-bubble--${message.role}`;
     if (message.role === "assistant") {
@@ -494,6 +680,14 @@ export function createPanel(deps: PanelDeps): PanelController {
       }
     } else {
       bubble.textContent = message.content;
+    }
+    if (message.imagesDropped) {
+      // Restored from storage minus its pictures. Better to say so than to show
+      // a bubble that has quietly lost half of what was asked.
+      const note = document.createElement("div");
+      note.className = "sidechats-dropped-note";
+      note.textContent = "Image not restored";
+      bubble.prepend(note);
     }
     bodyEl.appendChild(bubble);
     scrollToBottom();
@@ -571,6 +765,26 @@ export function createPanel(deps: PanelDeps): PanelController {
     headerPreviewEl.textContent = text;
   }
 
+  /**
+   * Hand the current thread to whoever is keeping it. Called after anything
+   * that changes what a reload would need to bring back.
+   *
+   * An untouched panel is skipped deliberately: writing an empty side chat
+   * would resurrect a blank panel on the next page load, which is worse than
+   * not restoring anything.
+   */
+  function persist(): void {
+    if (!deps.onPersist) return;
+    if (state.messages.length === 0 && !state.sideChatId) return;
+    deps.onPersist({
+      sideChatId: state.sideChatId,
+      contextPackage: state.contextPackage,
+      messages: state.messages,
+      isOpen: isOpen(),
+      savedAt: Date.now(),
+    });
+  }
+
   async function submit(): Promise<void> {
     const question = inputEl.value.trim();
     const images = state.pendingImages;
@@ -607,6 +821,10 @@ export function createPanel(deps: PanelDeps): PanelController {
     renderMessage(userMessage);
     showLoading();
     sendBtn.disabled = true;
+    // Before the round trip, not just after it: the question is on screen from
+    // this moment, and a reload while the reply is still in flight should bring
+    // it back rather than swallowing something the user watched themselves ask.
+    persist();
 
     try {
       const result = await deps.onSubmit(question, requestState, requestState.pendingImages);
@@ -650,18 +868,24 @@ export function createPanel(deps: PanelDeps): PanelController {
         sendBtn.disabled = false;
         inputEl.focus();
       }
+      // After both arms: an errored turn is still a turn the user asked, and a
+      // reload should bring it back rather than pretending it never happened.
+      persist();
     }
   }
 
   function open(ctx: ContextPackage): void {
     ensureMounted();
+    // From here on there is a side chat to come back to, so the way back to it
+    // stays on the page for the rest of the session.
+    handleEl.hidden = false;
 
     if (contextLost) {
       // Reopening cannot help; only a page reload can. Show the same wall.
       bodyEl.innerHTML = "";
       renderHeaderPreview(ctx);
       renderExtensionReloaded();
-      panelEl.classList.add("sidechats-open");
+      setOpen(true);
       return;
     }
 
@@ -677,13 +901,89 @@ export function createPanel(deps: PanelDeps): PanelController {
     renderEmptyState();
     inputEl.value = "";
     autoResize(inputEl);
-    panelEl.classList.add("sidechats-open");
+    setOpen(true);
 
     setTimeout(() => inputEl.focus(), 0);
   }
 
   function close(): void {
-    panelEl?.classList.remove("sidechats-open");
+    if (!shadowRoot) return;
+    setOpen(false);
+    // The closed/open flag is part of what gets restored, so a dismissal is
+    // itself worth writing down.
+    persist();
+  }
+
+  /**
+   * The other half of `close()`. Touches no state at all — that is the whole
+   * point: the thread the user dismissed is the thread they get back.
+   */
+  function reopen(): void {
+    if (!shadowRoot) return;
+    setOpen(true);
+    persist();
+    setTimeout(() => inputEl.focus(), 0);
+  }
+
+  function toggle(): void {
+    if (!shadowRoot) return;
+    if (isOpen()) close();
+    else reopen();
+  }
+
+  /**
+   * Rebuild a side chat that outlived its page. Everything is re-rendered
+   * through the same helpers a live thread uses, so a restored panel and a
+   * panel that never went away are the same panel.
+   */
+  function restore(record: PersistedSideChat): void {
+    ensureMounted();
+    handleEl.hidden = false;
+
+    if (contextLost) {
+      bodyEl.innerHTML = "";
+      renderHeaderPreview(record.contextPackage);
+      renderExtensionReloaded();
+      setOpen(record.isOpen);
+      return;
+    }
+
+    state = {
+      ...emptyState(record.contextPackage),
+      sideChatId: record.sideChatId,
+      messages: record.messages,
+    };
+
+    hideLoading();
+    renderHeaderPreview(record.contextPackage);
+    renderTray();
+    bodyEl.innerHTML = "";
+    if (record.messages.length === 0) {
+      renderEmptyState();
+    } else {
+      for (const message of record.messages) renderMessage(message);
+    }
+    inputEl.value = "";
+    autoResize(inputEl);
+    setOpen(record.isOpen);
+  }
+
+  /**
+   * Drop the side chat and the handle both. For arriving at a conversation that
+   * has no branch of its own — leaving the previous one's handle sitting there
+   * would promise a thread that isn't behind it.
+   */
+  function reset(): void {
+    if (!shadowRoot) return;
+    state = emptyState({ selectedText: "", parentUserMessage: "", parentAiResponse: "" });
+    hideLoading();
+    bodyEl.innerHTML = "";
+    renderHeaderPreview(state.contextPackage);
+    renderTray();
+    inputEl.value = "";
+    autoResize(inputEl);
+    setOpen(false);
+    handleEl.hidden = true;
   }
 
   function addImage(image: ImageAttachment): void {
@@ -709,7 +1009,7 @@ export function createPanel(deps: PanelDeps): PanelController {
       // Nothing that came before belongs to this message — the panel was not
       // even open. Clear rather than appending an error under a stale thread.
       bodyEl.innerHTML = "";
-      panelEl.classList.add("sidechats-open");
+      setOpen(true);
     }
     // A capture can be the first thing to notice the extension was reloaded.
     // Route it to the terminal state rather than rendering the same sentence as
@@ -730,5 +1030,17 @@ export function createPanel(deps: PanelDeps): PanelController {
     if (host) host.style.visibility = "";
   }
 
-  return { open, close, addImage, hideForCapture, showAfterCapture, isOpen, showError };
+  return {
+    open,
+    close,
+    reopen,
+    toggle,
+    restore,
+    reset,
+    addImage,
+    hideForCapture,
+    showAfterCapture,
+    isOpen,
+    showError,
+  };
 }

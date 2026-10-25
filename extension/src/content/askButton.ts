@@ -17,11 +17,38 @@ export function initAskButton(
   const accentColor = options.accentColor ?? DEFAULT_ACCENT;
   let button: HTMLButtonElement | null = null;
   let currentCtx: ContextPackage | null = null;
+  let currentRange: Range | null = null;
+  let shownAt = 0;
 
-  function removeButton(): void {
+  function removeButton(reason?: string): void {
+    // A button that vanishes within a moment of appearing looks, to the user,
+    // exactly like one that never appeared. Say what took it away.
+    if (button && reason && Date.now() - shownAt < 1000) {
+      debug(`Ask button removed ${Date.now() - shownAt}ms after showing: ${reason}`);
+    }
     button?.remove();
     button = null;
     currentCtx = null;
+    currentRange = null;
+  }
+
+  /**
+   * Keep the button attached to the selection when something scrolls.
+   *
+   * Removing it on every scroll was too eager: chat sites scroll inner
+   * containers on their own (streaming, layout shifts, anchoring), and any of
+   * those killed the button the instant it appeared. Only a selection that has
+   * scrolled out of view loses it.
+   */
+  function followScroll(): void {
+    if (!button || !currentRange) return;
+    const rect = currentRange.getBoundingClientRect();
+    const viewportHeight = window.innerHeight;
+    if ((rect.width === 0 && rect.height === 0) || rect.bottom < 0 || rect.top > viewportHeight) {
+      removeButton("selection scrolled out of view");
+      return;
+    }
+    positionButton(button, rect);
   }
 
   function positionButton(el: HTMLButtonElement, rect: DOMRect): void {
@@ -48,7 +75,7 @@ export function initAskButton(
     el.style.left = `${left + window.scrollX}px`;
   }
 
-  function showButton(rect: DOMRect, ctx: ContextPackage): void {
+  function showButton(rect: DOMRect, ctx: ContextPackage, range: Range): void {
     removeButton();
 
     const el = document.createElement("button");
@@ -80,6 +107,8 @@ export function initAskButton(
 
     button = el;
     currentCtx = ctx;
+    currentRange = range;
+    shownAt = Date.now();
   }
 
   function handleSelectionEnd(e: Event): void {
@@ -94,6 +123,7 @@ export function initAskButton(
 
     const ctx = getContext(selection);
     if (!ctx) {
+      debug("no Ask button: selection is not inside an AI reply.", describeAncestors(selection.anchorNode));
       removeButton();
       return;
     }
@@ -101,19 +131,46 @@ export function initAskButton(
     const range = selection.getRangeAt(0);
     const rect = range.getBoundingClientRect();
     if (rect.width === 0 && rect.height === 0) {
+      debug("no Ask button: the selection has no on-screen box.");
       removeButton();
       return;
     }
 
-    showButton(rect, ctx);
+    showButton(rect, ctx, range);
   }
 
-  document.addEventListener("mouseup", handleSelectionEnd);
-  document.addEventListener("scroll", removeButton, true);
+  // Capture phase on window, so the host page can't swallow the event first.
+  // A bubbling listener on document misses any mouseup the page stops on the
+  // way up — e.g. a site handling selection for its own popup — and the button
+  // then silently never appears.
+  window.addEventListener("mouseup", handleSelectionEnd, true);
+  document.addEventListener("scroll", followScroll, true);
   document.addEventListener("selectionchange", () => {
     const selection = window.getSelection();
     if (!selection || selection.isCollapsed || !selection.toString().trim()) {
-      removeButton();
+      removeButton("the page cleared the selection");
     }
   });
+}
+
+function debug(...args: unknown[]): void {
+  console.info("[SideChats]", ...args);
+}
+
+/**
+ * The selection's ancestors that carry identifying attributes — what a site
+ * adapter's selectors would have to match. Logged when a selection is
+ * rejected, so a site whose markup has moved can be fixed from one console
+ * line instead of a guess.
+ */
+function describeAncestors(node: Node | null): string[] {
+  const out: string[] = [];
+  let el = node && (node.nodeType === Node.ELEMENT_NODE ? (node as Element) : node.parentElement);
+  for (let depth = 0; el && depth < 15; el = el.parentElement, depth++) {
+    const attrs = Array.from(el.attributes)
+      .filter((a) => a.name.startsWith("data-") || a.name === "role")
+      .map((a) => `${a.name}="${a.value.slice(0, 40)}"`);
+    if (attrs.length) out.push(`${el.tagName.toLowerCase()} ${attrs.join(" ")}`);
+  }
+  return out;
 }

@@ -8,7 +8,7 @@ vi.mock("../lib/anthropicClient.js", () => ({
 
 import { askSideChat } from "../lib/anthropicClient.js";
 import { JSON_BODY_LIMIT, MAX_IMAGE_BYTES } from "../lib/images.js";
-import { sideChatsRouter } from "./sideChats.js";
+import { parseSeedMessages, sideChatsRouter } from "./sideChats.js";
 
 function makeApp() {
   const app = express();
@@ -419,5 +419,128 @@ describe("images on POST /api/side-chats/:id/messages", () => {
 
     expect(res.status).toBe(200);
     expect(lastAskArgs()[0].screenshot).toBeUndefined();
+  });
+});
+
+/**
+ * A side chat the client kept but the store swept. The extension persists its
+ * threads now, so it can outlive the 30-minute idle TTL here and come back
+ * asking to be re-created with the history it still has on screen.
+ */
+describe("parseSeedMessages", () => {
+  it("takes a well-formed alternating history", () => {
+    expect(
+      parseSeedMessages([
+        { role: "user", content: "why?" },
+        { role: "assistant", content: "because." },
+      ]),
+    ).toEqual([
+      { role: "user", content: "why?" },
+      { role: "assistant", content: "because." },
+    ]);
+  });
+
+  it("drops images rather than re-storing them", () => {
+    expect(parseSeedMessages([
+      { role: "user", content: "what is this?", images: [image()] },
+      { role: "assistant", content: "a chart." },
+    ])).toEqual([
+      { role: "user", content: "what is this?" },
+      { role: "assistant", content: "a chart." },
+    ]);
+  });
+
+  it.each([
+    ["nothing at all", undefined],
+    ["something that isn't an array", { role: "user", content: "why?" }],
+    ["an empty array", []],
+    ["an odd number of turns", [{ role: "user", content: "why?" }]],
+    [
+      "a history that starts with the assistant",
+      [
+        { role: "assistant", content: "because." },
+        { role: "user", content: "why?" },
+      ],
+    ],
+    [
+      "two user turns in a row",
+      [
+        { role: "user", content: "why?" },
+        { role: "user", content: "still why?" },
+      ],
+    ],
+    [
+      "a turn with no text",
+      [
+        { role: "user", content: 12 },
+        { role: "assistant", content: "because." },
+      ],
+    ],
+  ])("seeds nothing for %s", (_label, value) => {
+    expect(parseSeedMessages(value)).toEqual([]);
+  });
+});
+
+describe("POST / with priorMessages", () => {
+  /**
+   * The route hands the model client the live `SideChat` and then appends this
+   * turn to it, so the history has to be snapshotted at call time — reading it
+   * afterwards shows the new pair too.
+   */
+  function recordHistories(reply: string): string[][] {
+    const seen: string[][] = [];
+    vi.mocked(askSideChat).mockImplementation(async (sideChat) => {
+      seen.push(sideChat.messages.map((message) => message.content));
+      return reply;
+    });
+    return seen;
+  }
+
+  it("hands the model the restored history before the new question", async () => {
+    const seen = recordHistories("still with you");
+
+    const res = await request(makeApp())
+      .post("/api/side-chats")
+      .send({
+        ...validBody,
+        priorMessages: [
+          { role: "user", content: "why?" },
+          { role: "assistant", content: "because." },
+        ],
+      });
+
+    expect(res.status).toBe(201);
+    expect(seen.at(-1)).toEqual(["why?", "because."]);
+  });
+
+  it("keeps the seeded turns ahead of everything the re-created chat goes on to say", async () => {
+    const seen = recordHistories("still with you");
+
+    const created = await request(makeApp())
+      .post("/api/side-chats")
+      .send({
+        ...validBody,
+        priorMessages: [
+          { role: "user", content: "why?" },
+          { role: "assistant", content: "because." },
+        ],
+      });
+
+    await request(makeApp())
+      .post(`/api/side-chats/${created.body.sideChatId}/messages`)
+      .send({ question: "and then?" });
+
+    expect(seen.at(-1)).toEqual(["why?", "because.", "What does that mean?", "still with you"]);
+  });
+
+  it("ignores a malformed history rather than rejecting the request", async () => {
+    const seen = recordHistories("a reply");
+
+    const res = await request(makeApp())
+      .post("/api/side-chats")
+      .send({ ...validBody, priorMessages: "not a history" });
+
+    expect(res.status).toBe(201);
+    expect(seen.at(-1)).toEqual([]);
   });
 });

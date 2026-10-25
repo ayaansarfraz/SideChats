@@ -12,6 +12,11 @@ export function createSideChat(input: {
   selectedText: string;
   priorContext?: string;
   screenshot?: StoredImage;
+  /**
+   * History to start the chat with, when the client is re-creating a side chat
+   * this store already swept. Empty for a genuinely new one.
+   */
+  messages?: Message[];
 }): SideChat {
   const now = Date.now();
   const sideChat: SideChat = {
@@ -23,7 +28,7 @@ export function createSideChat(input: {
     selectedText: input.selectedText,
     priorContext: input.priorContext,
     screenshot: input.screenshot,
-    messages: [],
+    messages: input.messages ? [...input.messages] : [],
   };
   sideChats.set(sideChat.id, sideChat);
   return sideChat;

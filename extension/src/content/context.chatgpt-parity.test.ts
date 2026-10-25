@@ -126,3 +126,46 @@ describe("chatgpt extraction is unchanged by the adapter refactor", () => {
     expect(squash(ctx.parentAiResponse)).toContain("def match(tree)");
   });
 });
+
+/**
+ * Turn-level markup without the message-level role attribute: the article
+ * carries `data-turn` and the role element is gone. Matching only
+ * `[data-message-author-role]` found zero turns here, so the Ask button never
+ * appeared on chatgpt.com.
+ */
+const CHATGPT_TURN_ONLY_HTML = `
+  <main>
+    <article data-testid="conversation-turn-1" data-turn="user">
+      <h5 class="sr-only">You said:</h5>
+      <div class="whitespace-pre-wrap">What is a perfect matching?</div>
+    </article>
+    <article data-testid="conversation-turn-2" data-turn="assistant">
+      <h6 class="sr-only">ChatGPT said:</h6>
+      <div class="markdown prose"><p>It pairs up every vertex exactly once.</p></div>
+      <div><button type="button">Copy</button></div>
+    </article>
+  </main>`;
+
+describe("chatgpt turn-level markup", () => {
+  beforeEach(() => {
+    document.body.innerHTML = CHATGPT_TURN_ONLY_HTML;
+  });
+
+  it("finds turns by data-turn when no role attribute is present", () => {
+    const turns = collectTurns(chatgptAdapter, document.body);
+    expect(turns.map((t) => chatgptAdapter.roleOf(t))).toEqual(["user", "assistant"]);
+  });
+
+  it("extracts context with the screen-reader headings and buttons stripped", () => {
+    const selection = selectText(document.body, "every vertex");
+    const ctx = extractContext(selection, chatgptAdapter, document.body)!;
+    expect(ctx).not.toBeNull();
+    expect(squash(ctx.parentAiResponse)).toBe("It pairs up every vertex exactly once.");
+    expect(squash(ctx.parentUserMessage)).toBe("What is a perfect matching?");
+  });
+
+  it("still refuses a selection in the user's own turn", () => {
+    const selection = selectText(document.body, "perfect matching");
+    expect(extractContext(selection, chatgptAdapter, document.body)).toBeNull();
+  });
+});
