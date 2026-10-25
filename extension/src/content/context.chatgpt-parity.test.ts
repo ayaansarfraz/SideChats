@@ -169,3 +169,45 @@ describe("chatgpt turn-level markup", () => {
     expect(extractContext(selection, chatgptAdapter, document.body)).toBeNull();
   });
 });
+
+/**
+ * The October 2026 markup, as reported from the live page: no article, no role
+ * attribute. Each message is a `data-content-search-unit-key` ending in its
+ * role, and one `data-turn-key` wraps a question and its answer together.
+ */
+const UNIT_KEY_HTML = `
+  <main>
+    <div data-turn-key="t0">
+      <div data-content-search-turn-key="fallback-turn-0">
+        <div data-content-search-unit-key="fallback-turn-0:0:user"><p>What is a perfect matching?</p></div>
+        <div data-talvt-turn-state="complete">
+          <div data-content-search-unit-key="fallback-turn-0:1:assistant">
+            <div data-markdown-text-style="assistant"><p>It pairs up every vertex exactly once.</p></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+`;
+
+describe("chatgpt unit-key markup", () => {
+  beforeEach(() => {
+    document.body.innerHTML = UNIT_KEY_HTML;
+  });
+
+  it("finds the question and the answer as separate turns", () => {
+    const turns = collectTurns(chatgptAdapter, document);
+    expect(turns.map((t) => chatgptAdapter.roleOf(t))).toEqual(["user", "assistant"]);
+  });
+
+  it("extracts context from a selection in the answer", () => {
+    const ctx = extractContext(selectText(document, "every vertex"), chatgptAdapter, document);
+    expect(ctx?.selectedText).toBe("every vertex");
+    expect(ctx?.parentUserMessage).toBe("What is a perfect matching?");
+    expect(ctx?.parentAiResponse).toBe("It pairs up every vertex exactly once.");
+  });
+
+  it("refuses a selection in the question", () => {
+    expect(extractContext(selectText(document, "perfect matching"), chatgptAdapter, document)).toBeNull();
+  });
+});
