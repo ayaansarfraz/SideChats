@@ -221,6 +221,91 @@ try {
     JSON.stringify(panelText),
   );
 
+  // ------------------------------------------------ dismiss and come back
+  //
+  // The class check alone would pass over a panel that says "open" while parked
+  // off-canvas, so the dock's real on-screen position is read as well. That is
+  // the thing jsdom cannot tell us: whether the transform actually moved it.
+  const handle = page.locator("#sidechats-root .sidechats-handle");
+  const dockState = () =>
+    page.evaluate(() => {
+      const root = document.getElementById("sidechats-root")?.shadowRoot;
+      const handleEl = root?.querySelector(".sidechats-handle");
+      const dock = root?.querySelector(".sidechats-dock");
+      return {
+        open: Boolean(root?.querySelector(".sidechats-panel")?.classList.contains("sidechats-open")),
+        handleVisible: Boolean(handleEl && !handleEl.hidden),
+        left: dock ? Math.round(dock.getBoundingClientRect().left) : null,
+        viewport: window.innerWidth,
+        preview: root?.querySelector(".sidechats-header-preview")?.textContent ?? null,
+      };
+    });
+
+  const opened = await dockState();
+  check(
+    "the handle is on the page once a side chat exists, with the panel on screen",
+    opened.handleVisible && opened.left < opened.viewport - 200,
+    JSON.stringify(opened),
+  );
+
+  await handle.click();
+  await page.waitForTimeout(600);
+  const dismissed = await dockState();
+  check(
+    "clicking the handle slides the panel off screen and leaves the handle behind",
+    !dismissed.open && dismissed.handleVisible && dismissed.left >= dismissed.viewport - 1,
+    JSON.stringify(dismissed),
+  );
+  check(
+    "the handle is still clickable with the panel dismissed",
+    await handle.isVisible(),
+  );
+
+  await handle.click();
+  await page.waitForTimeout(600);
+  const restored = await dockState();
+  check(
+    "clicking it again brings back the same side chat, not a fresh one",
+    restored.open &&
+      restored.left < restored.viewport - 200 &&
+      (restored.preview ?? "").includes("symmetric difference"),
+    JSON.stringify(restored),
+  );
+
+  // A real mouse drag on the handle, not a synthetic transform.
+  const dragHandle = async (dx) => {
+    const box = await handle.boundingBox();
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2 + dx, box.y + box.height / 2, { steps: 20 });
+    await page.mouse.up();
+    await page.waitForTimeout(600);
+  };
+
+  await dragHandle(320);
+  const dragged = await dockState();
+  check(
+    "dragging the handle right past halfway snaps the panel shut",
+    !dragged.open && dragged.left >= dragged.viewport - 1,
+    JSON.stringify(dragged),
+  );
+
+  await dragHandle(-320);
+  const draggedBack = await dockState();
+  check(
+    "dragging it back left past halfway snaps it open again",
+    draggedBack.open && draggedBack.left < draggedBack.viewport - 200,
+    JSON.stringify(draggedBack),
+  );
+
+  await dragHandle(80);
+  const nudged = await dockState();
+  check(
+    "a drag released short of halfway springs back open instead of half-sliding",
+    nudged.open && nudged.left < nudged.viewport - 200,
+    JSON.stringify(nudged),
+  );
+
   // Selecting the user's own message must not offer a branch point.
   await page.evaluate(() => window.getSelection().removeAllRanges());
   const userMsg = page.locator('[data-testid="user-message"]').last();
@@ -436,6 +521,61 @@ try {
     "a capture while the panel is open stages into that conversation instead",
     staged.chips === 1 && staged.trayHidden === false && staged.thumbStillThere,
     JSON.stringify(staged),
+  );
+  // ------------------------------------------------ surviving a page reload
+  //
+  // The one check jsdom cannot stand in for: a real content script, a real
+  // chrome.storage.local, and a real navigation destroying every closure the
+  // thread used to live in.
+  //
+  // There is no server behind this check, so the send fails — which is fine and
+  // is in fact the harder case: the question is still something the user asked,
+  // so it has to come back, and the panel has to come back with it.
+  await page.evaluate(() => {
+    const root = document.getElementById("sidechats-root")?.shadowRoot;
+    const input = root?.querySelector(".sidechats-input");
+    input.value = "does this survive a reload?";
+    root?.querySelector(".sidechats-send")?.click();
+  });
+  await page.waitForTimeout(2500);
+
+  await page.reload();
+  await page.waitForTimeout(2000);
+
+  const afterReload = await page.evaluate(() => {
+    const root = document.getElementById("sidechats-root")?.shadowRoot;
+    const handleEl = root?.querySelector(".sidechats-handle");
+    return {
+      mounted: Boolean(root),
+      handleVisible: Boolean(handleEl && !handleEl.hidden),
+      open: Boolean(root?.querySelector(".sidechats-panel")?.classList.contains("sidechats-open")),
+      body: root?.querySelector(".sidechats-body")?.textContent ?? "",
+      preview: root?.querySelector(".sidechats-header-preview")?.textContent ?? null,
+    };
+  });
+  check(
+    "the side chat comes back after a page reload, thread and branch point intact",
+    afterReload.mounted &&
+      afterReload.open &&
+      afterReload.handleVisible &&
+      afterReload.body.includes("does this survive a reload?"),
+    JSON.stringify({ ...afterReload, body: afterReload.body.slice(0, 160) }),
+  );
+
+  // A conversation that never had a side chat must not inherit the last one's.
+  await page.goto("https://claude.ai/chat/another");
+  await page.waitForTimeout(2000);
+  const otherConversation = await page.evaluate(() => {
+    const root = document.getElementById("sidechats-root")?.shadowRoot;
+    return {
+      body: root?.querySelector(".sidechats-body")?.textContent ?? "",
+      open: Boolean(root?.querySelector(".sidechats-panel")?.classList.contains("sidechats-open")),
+    };
+  });
+  check(
+    "a different conversation does not inherit the previous one's side chat",
+    !otherConversation.open && !otherConversation.body.includes("does this survive a reload?"),
+    JSON.stringify(otherConversation),
   );
 } catch (err) {
   if (!(err instanceof StopEarly)) throw err;

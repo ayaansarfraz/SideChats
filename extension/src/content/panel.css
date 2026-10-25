@@ -19,7 +19,13 @@
   all: initial;
 }
 
-.sidechats-panel {
+/* The dock is the thing that moves. The panel and the grab handle both ride it,
+   so one transform slides them together and the handle keeps its place against
+   the panel's left edge at every point in a drag.
+
+   The palette lives here rather than on .sidechats-panel because the handle is
+   the panel's sibling, not its child, and would otherwise inherit none of it. */
+.sidechats-dock {
   /* --sc-accent is set inline per host site; this is the fallback. */
   --sc-accent: #5b5bd6;
   --sc-surface: #fcfcfd;
@@ -33,36 +39,101 @@
   --sc-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --sc-serif: ui-serif, Georgia, "Times New Roman", serif;
 
+  --sc-width: 408px;
+
   position: fixed;
   top: 0;
   right: 0;
   height: 100vh;
-  width: 408px;
+  width: var(--sc-width);
   max-width: 92vw;
-  display: flex;
-  flex-direction: column;
-  background: var(--sc-surface);
-  color: var(--sc-ink);
-  border-left: 1px solid var(--sc-line);
-  box-shadow: -24px 0 60px -20px rgba(16, 16, 24, 0.28);
   z-index: 2147483647;
   font-family: var(--sc-sans);
   font-size: 14px;
   line-height: 1.5;
   box-sizing: border-box;
   transform: translateX(100%);
-  visibility: hidden;
-  transition: transform 260ms cubic-bezier(0.22, 1, 0.36, 1), visibility 0s linear 260ms;
+  transition: transform 260ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-.sidechats-panel * {
+.sidechats-dock * {
   box-sizing: border-box;
 }
 
-.sidechats-panel.sidechats-open {
+.sidechats-dock.sidechats-open {
   transform: translateX(0);
-  visibility: visible;
-  transition: transform 260ms cubic-bezier(0.22, 1, 0.36, 1), visibility 0s linear 0s;
+}
+
+/* While a drag is in flight the transform is written on every mousemove, so the
+   easing has to get out of the way or the panel lags the pointer by 260ms. */
+.sidechats-dock.sidechats-dragging {
+  transition: none;
+}
+
+/* The panel now fills the dock instead of positioning itself against the
+   viewport. It stays a containing block for the drop overlay's ::after. */
+.sidechats-panel {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--sc-surface);
+  color: var(--sc-ink);
+  border-left: 1px solid var(--sc-line);
+  box-shadow: -24px 0 60px -20px rgba(16, 16, 24, 0.28);
+}
+
+/* ---------- the grab handle ---------- */
+
+/* Hangs off the dock's left edge, so it is the one part of a closed side chat
+   still on screen — and the way back to it. Sized for a comfortable grab
+   without becoming furniture on someone else's product. */
+.sidechats-handle {
+  position: absolute;
+  left: -30px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: grid;
+  place-items: center;
+  appearance: none;
+  width: 30px;
+  height: 68px;
+  padding: 0;
+  border: 1px solid var(--sc-line);
+  border-right: none;
+  border-radius: 10px 0 0 10px;
+  background: var(--sc-raise);
+  color: var(--sc-ink-soft);
+  cursor: grab;
+  box-shadow: -8px 0 22px -12px rgba(16, 16, 24, 0.4);
+  /* Stops a touch drag from scrolling the host page underneath the gesture. */
+  touch-action: none;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.sidechats-handle:hover {
+  background: var(--sc-surface);
+  color: var(--sc-ink);
+}
+
+/* A class selector has to beat the UA sheet here, same as the tray below. */
+.sidechats-handle[hidden] {
+  display: none;
+}
+
+.sidechats-dock.sidechats-dragging .sidechats-handle {
+  cursor: grabbing;
+}
+
+/* The chevron points where the click will send the panel: left to pull it open,
+   right to push it away. */
+.sidechats-handle svg {
+  transition: transform 260ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.sidechats-dock.sidechats-open .sidechats-handle svg {
+  transform: rotate(180deg);
 }
 
 /* ---------- header: the excerpt, which is the whole point ---------- */
@@ -254,6 +325,15 @@
   /* No pre-wrap here: markdown.ts produces real paragraphs and lists, so
      preserving source newlines on top of them would double every gap. */
   word-wrap: break-word;
+}
+
+/* A message restored from storage without its picture. Quiet — it is a footnote
+   about what is missing, not an error. */
+.sidechats-dropped-note {
+  margin-bottom: 5px;
+  font-size: 11.5px;
+  font-style: italic;
+  opacity: 0.72;
 }
 
 .sidechats-bubble--error {
@@ -553,7 +633,7 @@
 /* ---------- dark ---------- */
 
 @media (prefers-color-scheme: dark) {
-  .sidechats-panel {
+  .sidechats-dock {
     --sc-surface: #131317;
     --sc-raise: #1b1b21;
     --sc-ink: #f3f3f6;
@@ -561,7 +641,14 @@
     --sc-line: #272730;
     --sc-wash: color-mix(in srgb, var(--sc-accent) 14%, transparent);
     --sc-wash-strong: color-mix(in srgb, var(--sc-accent) 26%, transparent);
+  }
+
+  .sidechats-panel {
     box-shadow: -24px 0 60px -20px rgba(0, 0, 0, 0.6);
+  }
+
+  .sidechats-handle {
+    box-shadow: -8px 0 22px -12px rgba(0, 0, 0, 0.65);
   }
 
   .sidechats-bubble--error {
@@ -572,8 +659,8 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .sidechats-panel,
-  .sidechats-panel * {
+  .sidechats-dock,
+  .sidechats-dock * {
     transition-duration: 0.01ms !important;
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;

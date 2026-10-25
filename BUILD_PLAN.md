@@ -146,8 +146,8 @@ Already implemented server-side and reused as-is:
 Two layers, matching what already exists:
 
 - **Server (source of truth):** in-memory `Map<sideChatId, SideChat>` in `store.ts`, each holding the full message history, swept after 30 minutes of inactivity. No database for v1 — acceptable since side chats are explicitly ephemeral/exploratory (per PROJECT.md's product philosophy) and nothing here needs to survive a server restart.
-- **Extension (session-only):** the currently-open panel keeps `sideChatId` + rendered messages in an in-memory JS variable inside the content script. Nothing is written to `chrome.storage`. A full page reload of the ChatGPT tab loses any open side chat — acceptable for an MVP whose job is just to test the interaction, not to be durable.
-- No mapping is kept from "which main-chat message has which branches" (that's the explicitly-deferred "persistent branches / reopen branches" feature).
+- **Extension (durable per conversation):** the panel still keeps its live state in a closure variable, but every change worth keeping is written to `chrome.storage.local` under `sidechat:<host><pathname>` — one record per *conversation*, so a branch belongs to the thread it came from. See "Keeping a side chat" below.
+- No mapping is kept from "which main-chat message has which branches" — one side chat per conversation, not one per message. The message-level version of that is still the deferred "persistent branches" feature.
 
 ## Folder / File Structure
 
@@ -346,15 +346,97 @@ request. `express.json()` is raised from its 100 KB default accordingly.
 
 Images live in the same in-memory `Map` as everything else, under the existing
 30-minute idle TTL, so growth is bounded by that and by the 30 req/min rate
-limit. Nothing is written to disk or to `chrome.storage`, unchanged from the
-MVP. A screenshot that seeds a side chat is stored once on the `SideChat` and
-re-sent to the API on every turn — the Anthropic API is stateless, but the
-*extension* only ever uploads those bytes once.
+limit. Nothing is written to disk on the server. A screenshot that seeds a side
+chat is stored once on the `SideChat` and re-sent to the API on every turn — the
+Anthropic API is stateless, but the *extension* only ever uploads those bytes
+once.
+
+On the extension side these bytes now do reach `chrome.storage.local`, because a
+persisted thread carries the images in it (see "Keeping a side chat"). That is
+what the quota fallback there is for: a record too big to store is re-stored
+without its pictures rather than not stored at all.
+
+## Keeping a side chat
+
+The MVP threw a side chat away the moment you dismissed it: `close()` only
+dropped a CSS class, and the only way back in was `open()`, which resets state.
+So "close" and "delete" were the same gesture, and a reload was the same again.
+
+Three pieces fix that.
+
+### The dock
+
+`panel.css` used to position `.sidechats-panel` against the viewport and slide
+it with `transform: translateX(100%)` plus `visibility: hidden`. It is now
+wrapped in a `.sidechats-dock` that owns the geometry, the transform and the
+palette; the panel fills it, and a `.sidechats-handle` hangs off its left edge.
+One transform moves both, which is what lets the handle stay pinned to the
+panel's edge at every point in a drag.
+
+`visibility: hidden` had to go — it would take the handle down with the panel.
+A dismissed panel gets the `inert` attribute instead, which is the half that
+mattered: not tabbable, not hit-testable.
+
+The palette (`--sc-*`) moved from `.sidechats-panel` up to `.sidechats-dock` for
+the same reason. The handle is the panel's sibling, so it would inherit none of
+it otherwise. **If you add a colour, put it on the dock.**
+
+### Open, reopen, restore
+
+`open(ctx)` still means "a new branch point" and still resets state. Three
+entry points now sit beside it and deliberately do not:
+
+| method | what it means |
+| --- | --- |
+| `reopen()` | put the current thread back on screen, untouched |
+| `toggle()` | whichever of `close`/`reopen` applies — what the handle does |
+| `restore(record)` | rehydrate a thread that outlived its page |
+| `reset()` | forget the thread and take the handle away — for navigating to a conversation with no side chat |
+
+The handle appears the first time there is a side chat to come back to and stays
+for the session. `showError()` and `addImage()` mount the panel without one, and
+do not reveal it.
+
+### Storage
+
+`content/persistence.ts`, keyed `sidechat:<host><pathname>` — query strings and
+hashes stripped, since `?model=…` is the same conversation. Records hold
+`sideChatId`, the context package, the messages and whether the panel was open;
+`status`, `error` and staged-but-unsent images are left out on purpose.
+
+The panel writes through an `onPersist` callback rather than touching storage
+itself: it knows when the thread changed, `content.ts` knows which conversation
+it belongs to. A question is written *before* its reply arrives, so a reload
+mid-request doesn't swallow something the user watched themselves ask.
+
+Two defences, because a record can carry base64 images against a ~10 MB budget:
+a quota failure retries once with the images stripped (the words are worth more
+than the pictures, and the restored bubble says an image was dropped), and only
+the five most recently saved conversations are kept.
+
+### Two things that follow from it
+
+**SPA navigation.** Nothing in the extension watched for URL changes before,
+which was survivable when a side chat died with the panel. Now that a chat
+belongs to a URL, `content/navigation.ts` watches for one. Note it does *not*
+patch `history.pushState`: a content script runs in an isolated world with its
+own globals, so a patched `pushState` would only ever see the content script's
+own calls, never the host app's. What crosses the boundary is `popstate` and the
+URL itself — hence a listener plus a 500ms poll.
+
+**Re-creating an expired chat.** A restored `sideChatId` older than the server's
+30-minute sweep is a 404 waiting to happen, so `content.ts` drops it up front and
+the next question creates a fresh side chat. That chat is seeded with the thread
+the user can still see, via an optional `priorMessages` on `CREATE_SIDE_CHAT` —
+otherwise the panel would show a conversation the model has no memory of, which
+reads as the model losing the thread rather than the server expiring it. The
+extension sends text only (`toPriorMessages` in `apiClient.ts` also drops the
+unanswered turns a failed send leaves behind), and the server validates the
+alternation and ignores anything malformed rather than 400ing the request.
 
 ## Explicitly NOT Building in v1
 
-- Persistent branches / storage across page reloads or browser restarts
-- Reopening past side chats, or any indicator that a message "has branches"
+- Persistent branches *per message* — one side chat per conversation does persist across reloads (see "Keeping a side chat"); what's still missing is several branches hanging off different messages, and any indicator that a message "has branches"
 - Promote-to-main / merge-back-into-conversation
 - Branch tree visualization
 - Embeddings/retrieval-based context selection — plain "last message + selected text" only

@@ -2,6 +2,7 @@ import { Router } from "express";
 import { askSideChat } from "../lib/anthropicClient.js";
 import { validateImageFields } from "../lib/images.js";
 import { appendMessages, createSideChat, getSideChat, removeSideChat } from "../lib/store.js";
+import type { Message } from "../types.js";
 
 /**
  * Both 400 paths name the fields that actually failed rather than restating the
@@ -18,6 +19,30 @@ function badRequest(missing: string[], invalid: string[]): string {
 
 function asString(value: unknown): string {
   return typeof value === "string" ? value : "";
+}
+
+/**
+ * History a client sent to re-seed a side chat this store already swept.
+ *
+ * Validated rather than trusted, and dropped whole rather than repaired: the
+ * Anthropic API rejects a `messages` array that doesn't alternate from a user
+ * turn, and a request that 400s at the model is a worse outcome than a chat
+ * that starts without the history the client hoped to restore. Images are
+ * ignored — the branch point is already stored on the side chat.
+ */
+export function parseSeedMessages(value: unknown): Message[] {
+  if (!Array.isArray(value) || value.length === 0) return [];
+  if (value.length % 2 !== 0) return [];
+
+  const seeded: Message[] = [];
+  for (const [index, item] of value.entries()) {
+    const role = (item as Message | null)?.role;
+    const content = (item as Message | null)?.content;
+    const expected = index % 2 === 0 ? "user" : "assistant";
+    if (role !== expected || typeof content !== "string") return [];
+    seeded.push({ role, content });
+  }
+  return seeded;
 }
 
 export const sideChatsRouter = Router();
@@ -62,6 +87,7 @@ sideChatsRouter.post("/", async (req, res) => {
     selectedText: asString(selectedText),
     priorContext,
     screenshot,
+    messages: parseSeedMessages(req.body?.priorMessages),
   });
 
   try {
